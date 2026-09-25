@@ -17,3 +17,5 @@ venv/
 
 .DS_Store
 .ipynb_checkpoints/
+data/chunks/
+data/corpus/acts.jsonl
