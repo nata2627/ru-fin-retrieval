@@ -36,7 +36,7 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--chunks", default="base", help="какая нарезка (имя файла в data/chunks)")
     ap.add_argument("--model", default="bge-m3", choices=list(MODELS) + ["bm25"])
-    ap.add_argument("--batch-size", type=int, default=8)
+    ap.add_argument("--batch-size", type=int, default=4)
     ap.add_argument("--device", default=None)
     ap.add_argument("--limit", type=int, default=0)
     args = ap.parse_args()

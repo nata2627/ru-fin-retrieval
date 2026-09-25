@@ -22,6 +22,9 @@ from typing import Iterator, Sequence
 # заголовки разделов внутри акта
 _CHAPTER = re.compile(r"^Глава\s+(\d+)\.?\s*(.*)$")
 _ANNEX = re.compile(r"^(Приложение(?:\s+\d+)?)\b\s*(.*)$")
+# строка оглавления: «Приложение 3 . . . . . . . 47». Выглядит как заголовок
+# раздела, но им не является, и подхватывать её название нельзя.
+_TOC_LINE = re.compile(r"\.\s*\.\s*\.|\.{4,}")
 # начало пункта: «1.1.», «3.1.4.», «12.» — номер и точка в начале строки
 _UNIT = re.compile(r"^(\d+(?:\.\d+)*)\.\s+(?=\S)")
 
@@ -101,6 +104,13 @@ def parse_units(text: str) -> list[Unit]:
         start, end = pos, pos + len(line)
         pos = end + 1
 
+        if _TOC_LINE.search(line):
+            pos = end + 1 if False else pos      # строка оглавления: не заголовок и не текст
+            if cur is not None:
+                cur.text += "\n" + line
+                cur.end = end
+            continue
+
         ch, an = _CHAPTER.match(line), _ANNEX.match(line)
         if ch:
             section = f"Глава {ch.group(1)}. {ch.group(2)}".strip().rstrip(".")
@@ -125,10 +135,37 @@ def parse_units(text: str) -> list[Unit]:
     return [u for u in units if u.text.strip()]
 
 
-def _header(act: dict, section: str) -> str:
-    """Шапка, приписываемая к чанку: чей это акт и какой раздел."""
-    head = f"{act['kind'].capitalize()} Банка России № {act['number']} от {act['date']}. {act['title']}"
-    return f"{head}\n{section}" if section else head
+# название в перечне часто уже начинается с вида документа: «Указание Банка
+# России "О порядке…"». Повторять его в шапке незачем.
+_KIND_PREFIX = re.compile(
+    r"^(Указание|Положение|Инструкция|Методические\s+рекомендации|"
+    r"Официальное\s+разъяснение)(\s+Банка\s+России)?\s*", re.I)
+
+
+def _header(act: dict, section: str, ruler: "TokenRuler | None" = None,
+            max_tokens: int | None = None) -> str:
+    """Шапка, приписываемая к чанку: чей это акт и какой раздел.
+
+    Номер и дата идут первыми и не обрезаются никогда: по ним акт и опознают.
+    Режется только название. Без обрезки шапка съедала весь чанк — у актов
+    с названием в полторы тысячи знаков при размере чанка 256 токенов
+    встречались шапки на 323 токена, и содержания в чанк не попадало вовсе.
+    """
+    kind = act["kind"].capitalize()
+    stem = f"{kind} Банка России № {act['number']} от {act['date']}"
+    title = _KIND_PREFIX.sub("", act["title"].strip()).strip(' "«»')
+    tail = f". {section}" if section else ""
+
+    if ruler is None or not max_tokens:
+        return f"{stem}. {title}{tail}"
+
+    room = max_tokens - ruler.count(stem + tail) - 2
+    if room <= 4:
+        return f"{stem}{tail}"
+    offs = ruler.offsets(title)
+    if len(offs) > room:
+        title = title[:offs[room - 1][1]].rstrip(" ,.;-") + "…"
+    return f"{stem}. {title}{tail}"
 
 
 def _split_long(text: str, ruler: TokenRuler, size: int, overlap: int,
@@ -163,18 +200,23 @@ def chunk_act(act: dict, ruler: TokenRuler, *, size: int = 512, overlap_share: f
     # вход на 512 токенах, и всё, что не поместилось, просто не будет
     # проиндексировано. Поэтому шапка вычитается из бюджета, а собранный
     # чанк на всякий случай подрезается по границе токена.
-    head_cost = ruler.count(_header(act, "") + "\n\n") if add_heading else 0
+    # шапке отводится не больше 40% чанка: остальное обязано достаться тексту
+    max_head = max(16, int(size * 0.4))
+    head_cost = ruler.count(_header(act, "", ruler, max_head) + "\n\n") if add_heading else 0
     body_budget = max(32, size - head_cost)
 
     def emit(body: str, section: str, units: str, s: int, e: int) -> None:
-        head = _header(act, section) if add_heading else ""
+        head = _header(act, section, ruler, max_head) if add_heading else ""
         prefix = f"{head}\n\n" if head else ""
         allow = max(1, size - (ruler.count(prefix) if prefix else 0))
         # подрезка повторяется: обрезанный по границе токена хвост при
         # повторной токенизации иногда склеивается с соседом и даёт +1 токен
         for _ in range(4):
             offs = ruler.offsets(body)
-            if len(offs) <= allow:
+            if not offs or len(offs) <= allow:
+                break
+            if allow < 1:
+                body = ""
                 break
             body = body[:offs[allow - 1][1]]
             e = s + len(body)

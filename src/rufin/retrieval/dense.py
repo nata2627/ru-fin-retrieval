@@ -18,30 +18,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-
-@dataclass(frozen=True)
-class ModelSpec:
-    name: str
-    path: str
-    query_prefix: str = ""
-    passage_prefix: str = ""
-    max_seq_length: int = 512
-    note: str = ""
-
-
-MODELS = {
-    "bge-m3": ModelSpec(
-        "bge-m3", "BAAI/bge-m3",
-        note="префиксы не нужны"),
-    "e5-large": ModelSpec(
-        "e5-large", "intfloat/multilingual-e5-large",
-        query_prefix="query: ", passage_prefix="passage: ",
-        note="без префиксов заметно хуже, проверяется абляцией"),
-    "rosberta": ModelSpec(
-        "rosberta", "ai-forever/ru-en-RoSBERTa",
-        query_prefix="search_query: ", passage_prefix="search_document: ",
-        note="русскоязычная, меньше и быстрее"),
-}
+from .model_specs import MODELS, ModelSpec  # noqa: F401  (переэкспорт)
 
 
 def pick_device() -> str:
@@ -59,13 +36,24 @@ def pick_device() -> str:
 
 
 class Encoder:
-    def __init__(self, spec: ModelSpec, device: str | None = None, batch_size: int = 8):
+    """Обёртка над моделью. Половинная точность включена по умолчанию на MPS:
+    замер на этой машине дал 4.9 чанка в секунду против 2.9 при float32,
+    а размер батча выше 4 только замедляет — восемь гигабайт памяти общие
+    с системой, и крупный батч упирается в них (docs/raw/build_index.txt).
+    """
+
+    def __init__(self, spec: ModelSpec, device: str | None = None, batch_size: int = 4,
+                 half: bool | None = None):
+        import torch
         from sentence_transformers import SentenceTransformer
         self.spec = spec
         self.device = device or pick_device()
         self.batch_size = batch_size
-        self.model = SentenceTransformer(spec.path, device=self.device)
+        use_half = (self.device in ("mps", "cuda")) if half is None else half
+        kwargs = {"torch_dtype": torch.float16} if use_half else {}
+        self.model = SentenceTransformer(spec.path, device=self.device, model_kwargs=kwargs)
         self.model.max_seq_length = spec.max_seq_length
+        self.half = use_half
 
     def encode(self, texts: list[str], *, is_query: bool, show_progress: bool = False) -> np.ndarray:
         prefix = self.spec.query_prefix if is_query else self.spec.passage_prefix
@@ -109,7 +97,7 @@ class DenseIndex:
 
 
 def encode_corpus(spec: ModelSpec, texts: list[str], ids: list[str], out_dir: str,
-                  batch_size: int = 8, device: str | None = None) -> dict:
+                  batch_size: int = 4, device: str | None = None) -> dict:
     """Посчитать эмбеддинги корпуса и сохранить матрицу рядом с идентификаторами.
 
     Матрица кладётся файлом, чтобы поиск потом работал без пересчёта
@@ -123,7 +111,7 @@ def encode_corpus(spec: ModelSpec, texts: list[str], ids: list[str], out_dir: st
     np.save(os.path.join(out_dir, "vectors.npy"), vec)
     with open(os.path.join(out_dir, "ids.txt"), "w", encoding="utf-8") as f:
         f.write("\n".join(ids) + "\n")
-    return {"model": spec.name, "device": enc.device, "chunks": len(ids),
+    return {"model": spec.name, "device": enc.device, "half": enc.half, "chunks": len(ids),
             "dim": int(vec.shape[1]), "seconds": round(seconds, 1),
             "per_second": round(len(ids) / seconds, 1) if seconds else 0.0,
             "size_mb": round(vec.nbytes / 1048576, 1)}
