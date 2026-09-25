@@ -14,11 +14,11 @@ import os
 import statistics
 import sys
 import time
-from dataclasses import dataclass
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from rufin.chunking import TokenRuler, chunk_act   # noqa: E402
+from rufin.chunk_configs import GRID              # noqa: E402
+from rufin.chunking import TokenRuler, chunk_act  # noqa: E402
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 ACTS = os.path.join(ROOT, "data", "corpus", "acts.jsonl")
@@ -27,27 +27,6 @@ REPORT = os.path.join(ROOT, "docs", "raw", "build_chunks.txt")
 
 # токенизатор общий у bge-m3 и multilingual-e5: обе модели построены на XLM-RoBERTa
 TOKENIZER = "xlm-roberta-base"
-
-
-@dataclass(frozen=True)
-class Config:
-    name: str
-    strategy: str
-    size: int
-    overlap: float
-    heading: bool
-    note: str
-
-
-BASE = Config("base", "structure", 512, 0.15, True, "базовая конфигурация")
-GRID = [
-    BASE,
-    Config("size-256",  "structure", 256,  0.15, True,  "размер чанка: 256 вместо 512"),
-    Config("size-1024", "structure", 1024, 0.15, True,  "размер чанка: 1024 вместо 512"),
-    Config("overlap-0", "structure", 512,  0.0,  True,  "без перекрытия"),
-    Config("by-length",  "length",   512,  0.15, True,  "нарезка по длине вместо структуры"),
-    Config("no-heading", "structure", 512, 0.15, False, "без шапки с актом и разделом"),
-]
 
 
 def main() -> None:

@@ -18,6 +18,7 @@ DIST = os.path.join(ROOT, "dist", "kaggle")
 
 FILES = [
     ("src/rufin/chunking.py", "chunking.py"),
+    ("src/rufin/chunk_configs.py", "chunk_configs.py"),
     ("src/rufin/retrieval/model_specs.py", "model_specs.py"),
     ("kaggle/index_kaggle.py", "index_kaggle.py"),
     ("kaggle/README.md", "README.md"),
@@ -25,6 +26,9 @@ FILES = [
 
 
 def main() -> None:
+    # каталог пересобирается с нуля: иначе в датасет уезжает мусор вроде
+    # __pycache__, оставшийся от пробного запуска
+    shutil.rmtree(DIST, ignore_errors=True)
     os.makedirs(DIST, exist_ok=True)
     for src, dst in FILES:
         shutil.copyfile(os.path.join(ROOT, src), os.path.join(DIST, dst))

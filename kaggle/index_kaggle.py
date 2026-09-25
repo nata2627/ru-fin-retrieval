@@ -22,21 +22,11 @@ import time
 
 import numpy as np
 
+from chunk_configs import BY_NAME as CONFIGS, GRID
 from chunking import TokenRuler, chunk_act
 from model_specs import ABLATION, HEADLINE, MODELS
 
 TOKENIZER = "xlm-roberta-base"
-
-# те же конфигурации нарезки, что и в scripts/build_chunks.py
-CONFIGS = {
-    "base":       dict(strategy="structure", size=512,  overlap=0.15, heading=True),
-    "size-256":   dict(strategy="structure", size=256,  overlap=0.15, heading=True),
-    "size-1024":  dict(strategy="structure", size=1024, overlap=0.15, heading=True),
-    "overlap-0":  dict(strategy="structure", size=512,  overlap=0.0,  heading=True),
-    "by-length":  dict(strategy="length",    size=512,  overlap=0.15, heading=True),
-    "no-heading": dict(strategy="structure", size=512,  overlap=0.15, heading=False),
-}
-
 
 def load_acts(path: str) -> list[dict]:
     opener = gzip.open if path.endswith(".gz") else open
@@ -44,11 +34,11 @@ def load_acts(path: str) -> list[dict]:
         return [json.loads(l) for l in f if l.strip()]
 
 
-def build_chunks(acts: list[dict], cfg: dict, ruler: TokenRuler) -> tuple[list[str], list[str]]:
+def build_chunks(acts: list[dict], cfg, ruler: TokenRuler) -> tuple[list[str], list[str]]:
     ids, texts = [], []
     for act in acts:
-        for ch in chunk_act(act, ruler, size=cfg["size"], overlap_share=cfg["overlap"],
-                            strategy=cfg["strategy"], add_heading=cfg["heading"]):
+        for ch in chunk_act(act, ruler, size=cfg.size, overlap_share=cfg.overlap,
+                            strategy=cfg.strategy, add_heading=cfg.heading):
             ids.append(ch.chunk_id)
             texts.append(ch.text)
     return ids, texts
@@ -87,7 +77,7 @@ def main() -> None:
     ap.add_argument("--headline-models", nargs="*", default=list(HEADLINE))
     ap.add_argument("--ablation-model", default=ABLATION)
     ap.add_argument("--ablation-configs", nargs="*",
-                    default=[c for c in CONFIGS if c != "base"])
+                    default=[c.name for c in GRID if c.name != "base"])
     ap.add_argument("--batch-size", type=int, default=32)
     ap.add_argument("--limit-acts", type=int, default=0, help="для пробного прогона")
     ap.add_argument("--device", default=None, help="cuda на Kaggle; определяется само")
