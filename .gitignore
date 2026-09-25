@@ -19,3 +19,7 @@ venv/
 .ipynb_checkpoints/
 data/chunks/
 data/corpus/acts.jsonl
+data/runs/
+data/results/
+data/embeddings/
+data/queries/
