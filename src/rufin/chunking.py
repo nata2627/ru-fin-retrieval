@@ -202,13 +202,23 @@ def chunk_act(act: dict, ruler: TokenRuler, *, size: int = 512, overlap_share: f
     # чанк на всякий случай подрезается по границе токена.
     # шапке отводится не больше 40% чанка: остальное обязано достаться тексту
     max_head = max(16, int(size * 0.4))
-    head_cost = ruler.count(_header(act, "", ruler, max_head) + "\n\n") if add_heading else 0
+    # один и тот же раздел встречается в акте десятки раз, а сборка шапки
+    # требует токенизации; без кэша она становится заметной частью работы
+    head_cache: dict[str, tuple[str, int]] = {}
+
+    def header_for(section: str) -> tuple[str, int]:
+        if section not in head_cache:
+            h = _header(act, section, ruler, max_head)
+            head_cache[section] = (h, ruler.count(f"{h}\n\n"))
+        return head_cache[section]
+
+    head_cost = header_for("")[1] if add_heading else 0
     body_budget = max(32, size - head_cost)
 
     def emit(body: str, section: str, units: str, s: int, e: int) -> None:
-        head = _header(act, section, ruler, max_head) if add_heading else ""
+        head, prefix_tokens = header_for(section) if add_heading else ("", 0)
         prefix = f"{head}\n\n" if head else ""
-        allow = max(1, size - (ruler.count(prefix) if prefix else 0))
+        allow = max(1, size - prefix_tokens)
         # подрезка повторяется: обрезанный по границе токена хвост при
         # повторной токенизации иногда склеивается с соседом и даёт +1 токен
         for _ in range(4):
