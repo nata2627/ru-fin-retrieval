@@ -32,8 +32,18 @@ CHUNKDIR = os.path.join(ROOT, "data", "chunks")
 BENCH = os.path.join(ROOT, "data", "benchmark")
 REPORT = os.path.join(ROOT, "docs", "raw", "build_benchmark.txt")
 
-# какую долю эталонного фрагмента должен перекрывать сосед, чтобы получить оценку 1
+# Какую долю эталонного фрагмента должен перекрывать сосед, чтобы получить
+# оценку 1 без участия человека. Замер по корпусу: половина соседних пар
+# вообще не пересекается, у пересекающихся медиана перекрытия 0,15.
+# Сосед с перекрытием 0,15 содержит седьмую часть эталона, и вероятность,
+# что именно в неё попал ответ, невелика — записывать такое в разметку
+# значит выдать догадку за измерение. Порог 0,30 срабатывает на 3% пар,
+# где перекрытие действительно существенное; остальное идёт человеку.
 MIN_SPAN_OVERLAP = 0.30
+# сколько соседей показывать на ручную проверку: список должен быть обозримым
+MAX_REVIEW_PER_QUERY = 4
+# насколько далеко от эталона по порядку следования имеет смысл смотреть
+NEIGHBOUR_WINDOW = 2
 
 
 def span_overlap(a: dict, b: dict) -> float:
@@ -47,6 +57,9 @@ def main() -> None:
     ap.add_argument("--chunks", default="base")
     ap.add_argument("--synthetic", default=os.path.join(QDIR, "synthetic.jsonl"))
     ap.add_argument("--manual", default=os.path.join(QDIR, "manual.jsonl"))
+    ap.add_argument("--grades", default=os.path.join(QDIR, "grades.tsv"),
+                    help="проверенные вручную градации: тот же файл кандидатов "
+                         "с заполненной колонкой otsenka_0_1_2")
     args = ap.parse_args()
 
     chunks = [json.loads(l) for l in open(os.path.join(CHUNKDIR, f"{args.chunks}.jsonl"),
@@ -73,21 +86,44 @@ def main() -> None:
         if gold is None:
             continue
         rel = {gold_id: 2}
+        candidates: list[tuple[int, dict]] = []
         for other in by_act[gold["act_id"]]:
             if other["chunk_id"] == gold_id:
                 continue
             if span_overlap(gold, other) >= MIN_SPAN_OVERLAP:
                 rel[other["chunk_id"]] = 1
-            elif other.get("section") and other["section"] == gold.get("section"):
-                review_rows.append({
-                    "query_id": q["query_id"], "query": q["text"],
-                    "kandidat_chunk_id": other["chunk_id"],
-                    "otsenka_0_1_2": "",
-                    "razdel": other.get("section", ""),
-                    "punkty": other.get("units", ""),
-                    "nachalo": other["text"].split("\n\n", 1)[-1][:200].replace("\n", " "),
-                })
+                continue
+            distance = abs(other["position"] - gold["position"])
+            same_section = bool(other.get("section")) and other["section"] == gold.get("section")
+            if distance <= NEIGHBOUR_WINDOW or same_section:
+                # ближние соседи важнее однораздельных: сортируем по расстоянию
+                candidates.append((distance if distance <= NEIGHBOUR_WINDOW else 100 + distance,
+                                   other))
+        for _, other in sorted(candidates, key=lambda x: x[0])[:MAX_REVIEW_PER_QUERY]:
+            review_rows.append({
+                "query_id": q["query_id"], "query": q["text"],
+                "kandidat_chunk_id": other["chunk_id"],
+                "otsenka_0_1_2": "",
+                "razdel": other.get("section", ""),
+                "punkty": other.get("units", ""),
+                "nachalo": other["text"].split("\n\n", 1)[-1][:200].replace("\n", " "),
+            })
         qrels[q["query_id"]] = rel
+
+    # проверенные человеком градации имеют приоритет над автоматическими
+    graded_by_hand = 0
+    if os.path.exists(args.grades):
+        with open(args.grades, encoding="utf-8", newline="") as f:
+            for row in csv.DictReader(f, delimiter="\t"):
+                mark = (row.get("otsenka_0_1_2") or "").strip()
+                qid, cid = row.get("query_id"), row.get("kandidat_chunk_id")
+                if mark not in ("0", "1", "2") or qid not in qrels or not cid:
+                    continue
+                if mark == "0":
+                    qrels[qid].pop(cid, None)
+                else:
+                    qrels[qid][cid] = int(mark)
+                graded_by_hand += 1
 
     os.makedirs(QDIR, exist_ok=True)
     with open(os.path.join(QDIR, "queries.jsonl"), "w", encoding="utf-8") as f:
@@ -123,6 +159,8 @@ def main() -> None:
     say(f"размеченных пар запрос-фрагмент: {sum(len(r) for r in qrels.values())}")
     say(f"запросов с более чем одним релевантным фрагментом: {graded}")
     say(f"кандидатов на ручную проверку градаций: {len(review_rows)}")
+    say(f"градаций проставлено вручную: {graded_by_hand}"
+        + ("" if graded_by_hand else "  (файл data/queries/grades.tsv ещё не заполнен)"))
     say(f"корпус бенчмарка: {len(chunks)} фрагментов")
     say()
     say("выгружено в формате MTEB:")
