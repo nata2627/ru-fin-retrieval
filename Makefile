@@ -3,12 +3,14 @@
 
 PY ?= python3
 SAMPLE ?= 12
+ISSUES ?= 25
 PAUSE ?= 1.5
 
-.PHONY: help probe corpus index eval clean-raw
+.PHONY: help probe check-split corpus index eval clean-raw
 
 help:
 	@echo "probe   — разведка источников: доступность, объём, качество текстового слоя"
+	@echo "check-split — проверка нарезки выпусков на акты"
 	@echo "corpus  — сбор и нарезка корпуса              (этап 2)"
 	@echo "index   — построение индексов BM25 и плотных  (этап 3)"
 	@echo "eval    — прогон конфигураций и метрики       (этап 3)"
@@ -17,6 +19,9 @@ help:
 
 # Разведка. Перечни актов берутся из data/index, если они уже собраны;
 # make probe REFRESH=1 перекачивает их заново.
+check-split:
+	$(PY) scripts/validate_split.py --issues $(ISSUES) --pause $(PAUSE)
+
 probe:
 	$(PY) scripts/probe_sources.py --sample $(SAMPLE) --pause $(PAUSE) $(if $(REFRESH),--refresh,)
 

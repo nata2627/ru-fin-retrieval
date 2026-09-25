@@ -62,15 +62,28 @@ def _parse_rows(page: str) -> Iterator[dict]:
 def fetch_acts_index(client: Client, queries: Iterable[str] = QUERIES) -> list[dict]:
     """Собрать перечень актов, опубликованных в «Вестнике».
 
-    Возвращает записи, объединённые по паре (номер, дата): один и тот же акт
-    попадает в выдачу нескольких запросов.
+    Один и тот же акт нередко значится сразу за несколькими выпусками, и текст
+    лежит не всегда в первом из них. Поэтому записи объединяются по тройке
+    (номер, дата, выпуск), а не по паре (номер, дата): на этапе сбора акт
+    ищется по всем своим выпускам, пока не найдётся.
+
+    Поиск ищет подстроку и в номере, и в названии, поэтому один запрос из одной
+    буквы возвращает почти весь индекс, а несколько запросов дополняют друг друга.
     """
-    acts: dict[tuple[str, str], dict] = {}
+    acts: dict[tuple[str, str, str], dict] = {}
     for q in queries:
         page = client.get(SEARCH_URL, **{"UniDbQuery.Posted": "True", "UniDbQuery.stext": q}).text
         for rec in _parse_rows(page):
-            acts.setdefault((rec["number"], rec["date"]), rec)
-    return sorted(acts.values(), key=lambda a: (a["date"][-4:], a["date"][3:5], a["date"][:2]))
+            acts.setdefault((rec["number"], rec["date"], rec["issue"]), rec)
+    return sorted(acts.values(), key=lambda a: (a["date"][-4:], a["date"][3:5], a["date"][:2], a["issue"]))
+
+
+def group_by_act(acts: list[dict]) -> dict[tuple[str, str], list[dict]]:
+    """Сгруппировать записи перечня по самому акту: (номер, дата) -> выпуски."""
+    out: dict[tuple[str, str], list[dict]] = {}
+    for a in acts:
+        out.setdefault((a["number"], a["date"]), []).append(a)
+    return out
 
 
 def act_type(number: str) -> str:
