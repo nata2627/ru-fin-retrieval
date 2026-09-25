@@ -1,0 +1,19 @@
+# сырые выгрузки с сайтов в репозиторий не попадают: только скрипт сбора
+data/raw/
+data/interim/
+data/corpus/*.parquet
+data/embeddings/
+
+# индексы и матрицы эмбеддингов считаются заново
+*.npy
+*.faiss
+qdrant_storage/
+
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env
+
+.DS_Store
+.ipynb_checkpoints/
