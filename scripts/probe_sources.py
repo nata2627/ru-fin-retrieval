@@ -39,6 +39,15 @@ SOURCES = {
 }
 
 
+def rel(path: str) -> str:
+    """Путь относительно корня проекта.
+
+    Сырой вывод попадает в репозиторий, и абсолютные пути раскрывали бы
+    расположение проекта на конкретной машине, ничего не добавляя к смыслу.
+    """
+    return os.path.relpath(path, ROOT)
+
+
 class Tee:
     """Печать одновременно на экран и в файл: отчёт и сырой вывод не должны разойтись."""
 
@@ -73,7 +82,7 @@ def collect_lawacts(client: Client, out: Tee, cache: bool) -> list[dict]:
         with open(path, "w", encoding="utf-8") as f:
             for d in docs:
                 f.write(json.dumps(d, ensure_ascii=False) + "\n")
-        out(f"  собрано {len(docs)} записей -> {path}")
+        out(f"  собрано {len(docs)} записей -> {rel(path)}")
     for vid, n in collections.Counter(d["vid"] for d in docs).most_common():
         out(f"  {vid:<48} {n:>5}")
     return docs
@@ -90,7 +99,7 @@ def collect_vestnik(client: Client, out: Tee, cache: bool) -> list[dict]:
         with open(path, "w", encoding="utf-8") as f:
             for a in acts:
                 f.write(json.dumps(a, ensure_ascii=False) + "\n")
-        out(f"  собрано {len(acts)} актов -> {path}")
+        out(f"  собрано {len(acts)} актов -> {rel(path)}")
 
     by_type = collections.Counter(vb.act_type(a["number"]) for a in acts)
     names = {"П": "Положение", "У": "Указание", "И": "Инструкция", "Т": "Письмо",

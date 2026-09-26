@@ -31,7 +31,7 @@
   Закон Российской Федерации                           1
 
 == сбор перечня актов «Вестника» ==
-  собрано 6061 актов -> /Users/nataliagordeeva/Desktop/my_jobs/rag_retrieval/data/index/cbr_vestnik_acts.jsonl
+  собрано 6061 актов -> data/index/cbr_vestnik_acts.jsonl
   по видам:
     У     4292  Указание
     Т     1055  Письмо
