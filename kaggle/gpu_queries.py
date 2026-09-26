@@ -46,20 +46,35 @@ PROMPT = """Ниже фрагмент нормативного акта Банк
 Вопрос:"""
 
 
-def load_model(model_path: str, four_bit: bool = True):
+def load_model(model_path: str, four_bit: bool = True, device: str = "cuda"):
+    """Загрузить модель-генератор.
+
+    Имя параметра типа данных у transformers менялось (`torch_dtype` -> `dtype`),
+    версия на Kaggle заранее не известна, поэтому подходящее подбирается пробой.
+    """
+    import inspect
+
     import torch
     from transformers import AutoModelForCausalLM, AutoTokenizer
+
     tok = AutoTokenizer.from_pretrained(model_path)
     tok.padding_side = "left"          # для батчевой генерации дополнять слева
     if tok.pad_token is None:
         tok.pad_token = tok.eos_token
-    kwargs = {"device_map": "cuda:0", "dtype": torch.float16}
+
+    dtype_key = "dtype" if "dtype" in inspect.signature(
+        AutoModelForCausalLM.from_pretrained).parameters else "torch_dtype"
+    kwargs = {dtype_key: torch.float16 if device != "cpu" else torch.float32}
+    if device == "cuda":
+        kwargs["device_map"] = "cuda:0"
     if four_bit:
         from transformers import BitsAndBytesConfig
         kwargs["quantization_config"] = BitsAndBytesConfig(
             load_in_4bit=True, bnb_4bit_compute_dtype=torch.float16,
             bnb_4bit_quant_type="nf4", bnb_4bit_use_double_quant=True)
     model = AutoModelForCausalLM.from_pretrained(model_path, **kwargs)
+    if device != "cuda":
+        model = model.to(device)
     model.eval()
     return tok, model
 
@@ -92,14 +107,14 @@ def body_of(chunk: dict) -> str:
 
 def make_queries(chunks: list[dict], out_path: str, target: int = 150, per_act: int = 2,
                  model_path: str = DEFAULT_MODEL, batch_size: int = 8, seed: int = 13,
-                 four_bit: bool = True) -> dict:
+                 four_bit: bool = True, device: str = "cuda") -> dict:
     idf = IdfTable([c["text"] for c in chunks])
     good = [c for c in chunks if is_good_source(c)]
     random.Random(seed).shuffle(good)
     print(f"фрагментов всего {len(chunks)}, пригодных как источник вопроса {len(good)} "
           f"({100 * len(good) / len(chunks):.0f}%)", flush=True)
 
-    tok, model = load_model(model_path, four_bit=four_bit)
+    tok, model = load_model(model_path, four_bit=four_bit, device=device)
     print(f"модель поднята: {model_path}" + (" (4 бита)" if four_bit else ""), flush=True)
 
     out: list[dict] = []

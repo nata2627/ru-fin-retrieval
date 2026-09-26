@@ -41,6 +41,8 @@ def main() -> None:
     ap.add_argument("--batch-size", type=int, default=32)
     ap.add_argument("--limit-acts", type=int, default=0, help="для пробного прогона")
     ap.add_argument("--skip-queries", action="store_true")
+    ap.add_argument("--no-four-bit", action="store_true",
+                    help="без квантования: нужно для проверки на малой модели")
     ap.add_argument("--skip-embeddings", action="store_true")
     args = ap.parse_args()
 
@@ -69,7 +71,8 @@ def main() -> None:
         from gpu_queries import DEFAULT_MODEL, make_queries
         report["queries"] = make_queries(
             base_chunks, queries_path, target=args.target_queries,
-            model_path=args.generator or DEFAULT_MODEL)
+            model_path=args.generator or DEFAULT_MODEL,
+            four_bit=not args.no_four_bit, device=device)
 
     # ---- эмбеддинги ----
     if not args.skip_embeddings:
