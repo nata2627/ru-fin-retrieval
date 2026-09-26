@@ -24,3 +24,6 @@ data/results/
 data/embeddings/
 data/queries/
 dist/
+
+# личные заметки по проекту в публичный репозиторий не идут
+docs/cv-block.md

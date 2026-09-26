@@ -12,8 +12,6 @@
 """
 from __future__ import annotations
 
-import os
-import time
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -94,24 +92,3 @@ class DenseIndex:
         scores, idx = self.index.search(qvec, k)
         return [[(self.ids[j], float(s)) for j, s in zip(row_i, row_s) if j >= 0]
                 for row_i, row_s in zip(idx, scores)]
-
-
-def encode_corpus(spec: ModelSpec, texts: list[str], ids: list[str], out_dir: str,
-                  batch_size: int = 4, device: str | None = None) -> dict:
-    """Посчитать эмбеддинги корпуса и сохранить матрицу рядом с идентификаторами.
-
-    Матрица кладётся файлом, чтобы поиск потом работал без пересчёта
-    и без видеокарты: индексация — разовая операция.
-    """
-    os.makedirs(out_dir, exist_ok=True)
-    enc = Encoder(spec, device=device, batch_size=batch_size)
-    t0 = time.monotonic()
-    vec = enc.encode(texts, is_query=False, show_progress=True)
-    seconds = time.monotonic() - t0
-    np.save(os.path.join(out_dir, "vectors.npy"), vec)
-    with open(os.path.join(out_dir, "ids.txt"), "w", encoding="utf-8") as f:
-        f.write("\n".join(ids) + "\n")
-    return {"model": spec.name, "device": enc.device, "half": enc.half, "chunks": len(ids),
-            "dim": int(vec.shape[1]), "seconds": round(seconds, 1),
-            "per_second": round(len(ids) / seconds, 1) if seconds else 0.0,
-            "size_mb": round(vec.nbytes / 1048576, 1)}
