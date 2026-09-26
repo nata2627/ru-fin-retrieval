@@ -30,7 +30,8 @@ from rufin.retrieval.model_specs import ABLATION, HEADLINE  # noqa: E402
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--acts", default="/kaggle/input/ru-fin-retrieval/acts.jsonl.gz")
+    ap.add_argument("--acts", default=None,
+                    help="путь к корпусу; по умолчанию ищется сам")
     ap.add_argument("--out", default="/kaggle/working")
     ap.add_argument("--target-queries", type=int, default=150)
     ap.add_argument("--generator", default=None, help="модель для генерации вопросов")

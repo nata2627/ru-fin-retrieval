@@ -9,8 +9,10 @@
 """
 from __future__ import annotations
 
+import glob
 import gzip
 import json
+import os
 import time
 
 from rufin.chunk_configs import BY_NAME
@@ -24,9 +26,34 @@ def make_ruler() -> TokenRuler:
     return TokenRuler(AutoTokenizer.from_pretrained(TOKENIZER))
 
 
-def load_acts(path: str, limit: int = 0) -> list[dict]:
-    opener = gzip.open if path.endswith(".gz") else open
-    with opener(path, "rt", encoding="utf-8") as f:
+def resolve_acts(path: str | None = None) -> str:
+    """Найти файл корпуса.
+
+    Kaggle иногда разжимает архивы при создании датасета, и `acts.jsonl.gz`
+    превращается в `acts.jsonl`. Поэтому путь не задаётся жёстко: проверяются
+    оба варианта, а если не указан вовсе — корпус ищется среди подключённых
+    входов и в рабочей папке.
+    """
+    candidates: list[str] = []
+    if path:
+        candidates += [path, path[:-3] if path.endswith(".gz") else path + ".gz"]
+    candidates += sorted(glob.glob("/kaggle/input/*/acts.jsonl*"))
+    candidates += sorted(glob.glob("/kaggle/working/acts.jsonl*"))
+    candidates += sorted(glob.glob("acts.jsonl*"))
+    for c in candidates:
+        if os.path.exists(c):
+            return c
+    raise FileNotFoundError(
+        "корпус не найден. Ожидался acts.jsonl или acts.jsonl.gz среди "
+        f"подключённых входов. Проверено: {candidates}")
+
+
+def load_acts(path: str | None = None, limit: int = 0) -> list[dict]:
+    resolved = resolve_acts(path)
+    if path and resolved != path:
+        print(f"корпус найден как {resolved}", flush=True)
+    opener = gzip.open if resolved.endswith(".gz") else open
+    with opener(resolved, "rt", encoding="utf-8") as f:
         acts = [json.loads(l) for l in f if l.strip()]
     return acts[:limit] if limit else acts
 

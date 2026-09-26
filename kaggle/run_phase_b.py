@@ -31,7 +31,8 @@ from rufin.retrieval.model_specs import ABLATION, HEADLINE    # noqa: E402
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--acts", default="/kaggle/input/ru-fin-retrieval/acts.jsonl.gz")
+    ap.add_argument("--acts", default=None,
+                    help="путь к корпусу; по умолчанию ищется сам")
     ap.add_argument("--queries", default="/kaggle/input/ru-fin-queries/queries.jsonl")
     ap.add_argument("--embeddings", default="/kaggle/input/ru-fin-embeddings/embeddings")
     ap.add_argument("--out", default="/kaggle/working/runs")
