@@ -27,3 +27,8 @@ dist/
 
 # личные заметки по проекту в публичный репозиторий не идут
 docs/cv-block.md
+
+# ключи Kaggle лежат вне проекта, но на всякий случай
+.kaggle/
+kaggle.json
+access_token
