@@ -14,7 +14,7 @@ PAUSE ?= 1.5
 CHUNKS ?= base
 DENSE ?= bge-m3
 
-.PHONY: help probe check-split check-bm25 check-alignment corpus chunks use-chunks explan explan-apply gold gold-apply kaggle bench metrics latency errors clean-raw
+.PHONY: help probe check-split check-bm25 check-alignment corpus chunks use-chunks explan explan-apply gold gold-apply queries pool kaggle bench metrics latency errors clean-raw
 
 help:
 	@echo "Локально (памяти не требует):"
@@ -29,6 +29,8 @@ help:
 	@echo "  explan-apply перенести проверенный выбор в разметку"
 	@echo "  gold         подобрать эталоны к вопросам, написанным руками"
 	@echo "  gold-apply   перенести выбор по ним в разметку"
+	@echo "  queries      собрать тексты запросов для прогона (эталоны не нужны)"
+	@echo "  pool         лист разметки по объединённым выдачам всех конфигураций"
 	@echo "  bench        сборка набора запросов и выгрузка в формате MTEB"
 	@echo "  metrics      метрики по выдачам, посчитанным на Kaggle (CHUNKS=$(CHUNKS))"
 	@echo "  errors       разбор провальных запросов"
@@ -90,6 +92,14 @@ gold-apply:
 
 gold:
 	$(PY) scripts/find_gold.py --file data/queries/manual_questions.txt
+
+queries:
+	$(PY) scripts/build_query_texts.py
+
+# Кандидаты для разметки берутся из выдач всех конфигураций сразу: подбор
+# эталона выдачей одного метода дал бы ему незаслуженное преимущество.
+pool:
+	$(PY) scripts/pool_candidates.py --config $(CHUNKS)
 
 bench: check-alignment
 	$(PY) scripts/build_benchmark.py
