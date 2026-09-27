@@ -24,6 +24,7 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--tsv", default=os.path.join(QDIR, "explan_candidates.tsv"))
     ap.add_argument("--out", default=os.path.join(QDIR, "explan.jsonl"))
+    ap.add_argument("--origin", default="вопрос из разъяснений Банка России")
     args = ap.parse_args()
 
     rows = list(csv.DictReader(open(args.tsv, encoding="utf-8"), delimiter="\t"))
@@ -48,11 +49,11 @@ def main() -> None:
             continue
         out.append({
             "query_id": qid,
-            "origin": "вопрос из разъяснений Банка России",
+            "origin": args.origin,
             "text": header["vopros"],
             "gold_chunk_id": pick["chunk_id"],
-            "source_url": header["istochnik"],
-            "topic": header["tema_CB"],
+            "source_url": header.get("istochnik", ""),
+            "topic": header.get("tema_CB", ""),
         })
 
     with open(args.out, "w", encoding="utf-8") as f:

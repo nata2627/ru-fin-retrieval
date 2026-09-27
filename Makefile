@@ -14,7 +14,7 @@ PAUSE ?= 1.5
 CHUNKS ?= base
 DENSE ?= bge-m3
 
-.PHONY: help probe check-split check-bm25 check-alignment corpus chunks use-chunks explan explan-apply gold kaggle bench metrics latency errors clean-raw
+.PHONY: help probe check-split check-bm25 check-alignment corpus chunks use-chunks explan explan-apply gold gold-apply kaggle bench metrics latency errors clean-raw
 
 help:
 	@echo "Локально (памяти не требует):"
@@ -28,6 +28,7 @@ help:
 	@echo "  explan       собрать живые вопросы из «Разъяснений» Банка России"
 	@echo "  explan-apply перенести проверенный выбор в разметку"
 	@echo "  gold         подобрать эталоны к вопросам, написанным руками"
+	@echo "  gold-apply   перенести выбор по ним в разметку"
 	@echo "  bench        сборка набора запросов и выгрузка в формате MTEB"
 	@echo "  metrics      метрики по выдачам, посчитанным на Kaggle (CHUNKS=$(CHUNKS))"
 	@echo "  errors       разбор провальных запросов"
@@ -80,6 +81,12 @@ explan:
 
 explan-apply:
 	$(PY) scripts/apply_explan_choices.py
+
+# Тот же лист и та же процедура, но для вопросов, написанных руками.
+gold-apply:
+	$(PY) scripts/apply_explan_choices.py \
+		--tsv data/queries/manual_candidates.tsv \
+		--out data/queries/manual.jsonl --origin ручной
 
 gold:
 	$(PY) scripts/find_gold.py --file data/queries/manual_questions.txt
