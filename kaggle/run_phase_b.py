@@ -22,6 +22,8 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+import gzip                                                   # noqa: E402
+
 import gpu_common as common                                   # noqa: E402
 import gpu_search as S                                        # noqa: E402
 from rufin.chunk_configs import GRID                          # noqa: E402
@@ -52,17 +54,63 @@ def main() -> None:
     print(f"актов {len(acts)}, запросов {len(queries)}", flush=True)
 
     os.makedirs(args.out, exist_ok=True)
-    report: dict = {"queries": len(queries), "device": device, "runs": [], "index": {}}
+    # Версии библиотек записываются в отчёт: граница фрагмента считается
+    # в токенах, и от версии токенизатора зависит, где она пройдёт.
+    import tokenizers as _tk
+    import transformers as _tf
+    versions = {"transformers": _tf.__version__, "tokenizers": _tk.__version__}
+    print(f"transformers {versions['transformers']}, tokenizers {versions['tokenizers']}",
+          flush=True)
+    report: dict = {"queries": len(queries), "device": device, "versions": versions,
+                    "runs": [], "index": {}}
 
     def emb_dir(config: str, model: str) -> str | None:
         d = os.path.join(args.embeddings, config, model)
         return d if os.path.exists(os.path.join(d, "vectors.npy")) else None
 
+    def check_same_chunking(config: str, chunks: list[dict]) -> None:
+        """Убедиться, что нарезка совпала с той, на которой считались эмбеддинги.
+
+        Эмбеддинги посчитаны на этапе A в другой сессии. Если версия
+        токенизатора с тех пор изменилась, границы фрагментов сдвинутся:
+        имена вида «акт#номер» останутся прежними, а текст под ними станет
+        другим. Ошибки при этом не возникнет — выдачи молча окажутся
+        несопоставимыми. Поэтому сверяем списки имён целиком.
+        """
+        for model in os.listdir(os.path.join(args.embeddings, config)) \
+                if os.path.isdir(os.path.join(args.embeddings, config)) else []:
+            ids_path = os.path.join(args.embeddings, config, model, "ids.txt")
+            if not os.path.exists(ids_path):
+                continue
+            with open(ids_path, encoding="utf-8") as f:
+                saved = [l.rstrip("\n") for l in f if l.strip()]
+            mine = [c["chunk_id"] for c in chunks]
+            if saved != mine:
+                raise SystemExit(
+                    f"нарезка «{config}» разошлась с той, на которой считались эмбеддинги: "
+                    f"здесь {len(mine)} фрагментов, там {len(saved)}. Причина — другая "
+                    f"версия токенизатора (сейчас transformers {versions['transformers']}, "
+                    f"tokenizers {versions['tokenizers']}). Выдачи были бы несопоставимы.")
+            return
+
     configs = ["base"] + list(args.ablation_configs)
     for config in configs:
         print(f"\n=== нарезка {config} ===", flush=True)
         chunks = common.build_chunks(acts, config, ruler)
+        check_same_chunking(config, chunks)
         texts = {c["chunk_id"]: c["text"] for c in chunks}
+
+        # Базовая нарезка уезжает вместе с выдачами: локальной стороне нужны
+        # тексты фрагментов для разбора ошибок и сборки разметки, а повторять
+        # нарезку у себя она не может — версия токенизатора другая.
+        if config == "base":
+            dump = os.path.join(args.out, "chunks_base.jsonl.gz")
+            if not os.path.exists(dump):
+                with gzip.open(dump, "wt", encoding="utf-8") as f:
+                    for c in chunks:
+                        f.write(json.dumps(c, ensure_ascii=False) + "\n")
+                print(f"   фрагменты базовой нарезки сохранены: "
+                      f"{os.path.getsize(dump) / 1048576:.0f} МБ", flush=True)
 
         bm25, build_seconds = S.bm25_runs(chunks, queries)
         S.save_run(args.out, config, "bm25", bm25)

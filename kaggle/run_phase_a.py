@@ -58,7 +58,13 @@ def main() -> None:
     print(f"актов: {len(acts)}, символов {sum(len(a['text']) for a in acts) / 1e6:.1f} млн",
           flush=True)
 
-    report: dict = {"acts": len(acts), "device": device}
+    import tokenizers as _tk
+    import transformers as _tf
+    # от версии токенизатора зависят границы фрагментов, поэтому она в отчёте
+    versions = {"transformers": _tf.__version__, "tokenizers": _tk.__version__}
+    print(f"transformers {versions['transformers']}, tokenizers {versions['tokenizers']}",
+          flush=True)
+    report: dict = {"acts": len(acts), "device": device, "versions": versions}
     base_chunks = common.build_chunks(acts, "base", ruler)
     report["base_chunks"] = len(base_chunks)
 

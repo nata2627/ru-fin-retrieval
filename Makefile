@@ -14,13 +14,14 @@ PAUSE ?= 1.5
 CHUNKS ?= base
 DENSE ?= bge-m3
 
-.PHONY: help probe check-split corpus chunks kaggle bench metrics latency errors check-bm25 clean-raw
+.PHONY: help probe check-split check-bm25 check-alignment corpus chunks kaggle bench metrics latency errors clean-raw
 
 help:
 	@echo "Локально (памяти не требует):"
 	@echo "  probe        разведка источников: доступность, объём, качество текстового слоя"
 	@echo "  check-split  проверка нарезки выпусков «Вестника» на отдельные акты"
 	@echo "  check-bm25   сверка своей реализации BM25 с rank_bm25"
+	@echo "  check-alignment  сверка: тот ли текст под эталонным фрагментом"
 	@echo "  corpus       сбор корпуса: выпуски «Вестника» -> акты"
 	@echo "  chunks       нарезка актов на фрагменты (CONFIGS=base ...)"
 	@echo "  bench        сборка набора запросов и выгрузка в формате MTEB"
@@ -42,18 +43,27 @@ check-split:
 check-bm25:
 	$(PY) scripts/check_bm25.py
 
+check-alignment:
+	$(PY) scripts/check_alignment.py --chunks $(CHUNKS)
+
 corpus:
 	$(PY) scripts/build_corpus.py --pause $(PAUSE)
 
-# Нарезки занимают около двух гигабайт на диске. По умолчанию строится только
-# базовая: остальные нужны лишь для абляций и пересобираются на Kaggle.
+# Нарезки занимают около двух гигабайт на диске. Для работы они локально
+# не нужны: базовую отдаёт этап B на видеокарте (chunks_base.jsonl.gz),
+# и брать надо именно её — граница фрагмента считается в токенах, а версия
+# токенизатора у себя и на Kaggle может отличаться, и тогда под прежним
+# именем окажется другой текст. Цель оставлена для разработки.
 chunks:
 	$(PY) scripts/build_chunks.py $(if $(CONFIGS),--only $(CONFIGS),--only base)
 
 kaggle:
 	$(PY) scripts/make_kaggle_package.py
 
-bench:
+# Сборке разметки предшествует сверка нарезок: если под эталонным фрагментом
+# лежит не тот текст, по которому писался вопрос, метрики будут бессмысленны,
+# а заметить это по ним самим нельзя.
+bench: check-alignment
 	$(PY) scripts/build_benchmark.py
 
 metrics:
