@@ -14,7 +14,7 @@ PAUSE ?= 1.5
 CHUNKS ?= base
 DENSE ?= bge-m3
 
-.PHONY: help probe check-split check-bm25 check-alignment corpus chunks kaggle bench metrics latency errors clean-raw
+.PHONY: help probe check-split check-bm25 check-alignment corpus chunks use-chunks kaggle bench metrics latency errors clean-raw
 
 help:
 	@echo "Локально (памяти не требует):"
@@ -24,6 +24,7 @@ help:
 	@echo "  check-alignment  сверка: тот ли текст под эталонным фрагментом"
 	@echo "  corpus       сбор корпуса: выпуски «Вестника» -> акты"
 	@echo "  chunks       нарезка актов на фрагменты (CONFIGS=base ...)"
+	@echo "  use-chunks   поставить нарезку, выгруженную с видеокарты (FILE=...)"
 	@echo "  bench        сборка набора запросов и выгрузка в формате MTEB"
 	@echo "  metrics      метрики по выдачам, посчитанным на Kaggle (CHUNKS=$(CHUNKS))"
 	@echo "  errors       разбор провальных запросов"
@@ -56,6 +57,11 @@ corpus:
 # именем окажется другой текст. Цель оставлена для разработки.
 chunks:
 	$(PY) scripts/build_chunks.py $(if $(CONFIGS),--only $(CONFIGS),--only base)
+
+# Нарезка, по которой считались эмбеддинги, ставится как рабочая: повторять
+# её локально нельзя, версия токенизатора другая и границы сдвинутся.
+use-chunks:
+	$(PY) scripts/install_chunks.py $(FILE) --config $(CHUNKS)
 
 kaggle:
 	$(PY) scripts/make_kaggle_package.py
