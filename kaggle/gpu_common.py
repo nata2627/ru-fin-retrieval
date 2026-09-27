@@ -89,6 +89,17 @@ def find_embeddings(root: str = "/kaggle/input") -> str | None:
     return max(roots.items(), key=lambda kv: kv[1])[0]
 
 
+def find_file(name: str, root: str = "/kaggle/input") -> str | None:
+    """Найти файл среди подключённых входов.
+
+    Датасеты и вывод ядер монтируются на разной глубине: вывод ядра лежит
+    в /kaggle/input/<ядро>/, а датасет — в /kaggle/input/datasets/<кто>/<что>/.
+    Поэтому путь не задаётся, а файл ищется по имени.
+    """
+    hits = glob.glob(os.path.join(root, "**", name), recursive=True)
+    return sorted(hits, key=len)[0] if hits else None
+
+
 def pick_device() -> str:
     import torch
     return "cuda" if torch.cuda.is_available() else "cpu"

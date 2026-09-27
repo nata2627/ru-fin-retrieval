@@ -35,7 +35,8 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--acts", default=None,
                     help="путь к корпусу; по умолчанию ищется сам")
-    ap.add_argument("--queries", default="/kaggle/input/ru-fin-queries/queries.jsonl")
+    ap.add_argument("--queries", default=None,
+                    help="файл с запросами; по умолчанию ищется сам")
     ap.add_argument("--embeddings", default=None,
                     help="папка с матрицами этапа A; по умолчанию ищется сама")
     ap.add_argument("--out", default="/kaggle/working/runs")
@@ -56,7 +57,11 @@ def main() -> None:
         raise SystemExit("не найдены матрицы этапа A: подключите его вывод "
                          "через + Add Input -> Your Work")
     print("эмбеддинги этапа A:", embeddings, flush=True)
-    queries = [json.loads(l) for l in open(args.queries, encoding="utf-8") if l.strip()]
+    queries_path = args.queries or common.find_file("queries.jsonl")
+    if queries_path is None:
+        raise SystemExit("не найден queries.jsonl: подключите датасет с набором запросов")
+    print("запросы:", queries_path, flush=True)
+    queries = [json.loads(l) for l in open(queries_path, encoding="utf-8") if l.strip()]
     print(f"актов {len(acts)}, запросов {len(queries)}", flush=True)
 
     os.makedirs(args.out, exist_ok=True)
