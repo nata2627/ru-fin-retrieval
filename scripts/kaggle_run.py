@@ -160,10 +160,13 @@ def push_kernel(user: str, slug: str, title: str, script: str, script_args: str,
     # и обе расходуют квоту. Отмены в клиенте нет, остановить можно только
     # в браузере, поэтому хотя бы предупреждаем.
     probe = run(["kaggle", "kernels", "status", f"{user}/{slug}"])
-    if "running" in (probe.stdout or "").lower():
-        print(f"  ВНИМАНИЕ: предыдущий запуск {user}/{slug} ещё идёт и после нового "
-              f"пуша продолжит считаться. Остановить можно только в браузере: "
-              f"меню «...» у нужной версии -> Stop.")
+    state = (probe.stdout or "").lower()
+    # очередь опаснее счёта: версия, стоящая в очереди, всё равно запустится
+    if "running" in state or "queued" in state:
+        print(f"  ВНИМАНИЕ: предыдущий запуск {user}/{slug} ещё не завершён "
+              f"(в очереди или считается) и после нового пуша не отменится. "
+              f"Остановить можно только в браузере: меню «...» у БОЛЕЕ РАННЕЙ "
+              f"версии -> Stop.")
 
     r = run(["kaggle", "kernels", "push", "-p", folder])
     print((r.stdout or r.stderr).strip())
