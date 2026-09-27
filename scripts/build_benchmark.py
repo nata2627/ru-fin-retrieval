@@ -56,6 +56,8 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--chunks", default="base")
     ap.add_argument("--synthetic", default=os.path.join(QDIR, "synthetic.jsonl"))
+    ap.add_argument("--explan", default=os.path.join(QDIR, "explan.jsonl"),
+                    help="вопросы из «Разъяснений» Банка России")
     ap.add_argument("--manual", default=os.path.join(QDIR, "manual.jsonl"))
     ap.add_argument("--grades", default=os.path.join(QDIR, "grades.tsv"),
                     help="проверенные вручную градации: тот же файл кандидатов "
@@ -70,7 +72,9 @@ def main() -> None:
         by_act[c["act_id"]].append(c)
 
     queries: list[dict] = []
-    for path, origin in ((args.synthetic, "синтетический"), (args.manual, "ручной")):
+    for path, origin in ((args.synthetic, "синтетический"),
+                         (args.explan, "вопрос из разъяснений Банка России"),
+                         (args.manual, "ручной")):
         if not os.path.exists(path):
             continue
         for line in open(path, encoding="utf-8"):

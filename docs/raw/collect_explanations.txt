@@ -1,0 +1,51 @@
+разделов «Разъяснения»: 87
+
+   /explan/359-fz/                                        79 вопросов, акт 359-ФЗ
+   /explan/590-p/                                        172 вопросов, акт 590-П
+   /explan/845-p/                                          1 вопросов, акт 845-П
+   /explan/Psystem/                                      122 вопросов
+   /explan/acts_bko/                                     274 вопросов
+   /explan/acts_bs/                                       84 вопросов
+   /explan/app_decrees_president_aimed_ensuring_financial_stability/   28 вопросов
+   /explan/corporate_rel/                                 28 вопросов
+   /explan/dopusk/                                        39 вопросов
+   ... пройдено 20/87, собрано 827
+   /explan/eks/                                           31 вопросов
+   /explan/form_0403301/                                  20 вопросов
+   /explan/form_0409112/                                   5 вопросов
+   /explan/form_0409129/                                   8 вопросов
+   /explan/form_0409135/                                   8 вопросов, акт 4892-У
+   /explan/form_0409260/                                   3 вопросов
+   /explan/form_0409264/                                  58 вопросов
+   /explan/form_0409265/                                  44 вопросов
+   /explan/form_0409303/                                  86 вопросов
+   /explan/form_0409310/                                  55 вопросов
+   /explan/form_0409704/                                  21 вопросов, акт 4892-У
+   /explan/form_0409707/                                  19 вопросов
+   ... пройдено 40/87, собрано 1185
+   /explan/form_0420833/                                  16 вопросов, акт 6316-У
+   /explan/infr/                                           6 вопросов
+   /explan/inv_platform/                                  13 вопросов
+   /explan/invest/                                         3 вопросов
+   /explan/issue/                                         36 вопросов
+   /explan/likvid_ko/                                     19 вопросов
+   /explan/measures_support_citizens_economy/             80 вопросов
+   /explan/mery-podderzhki-fin-sektora/                   75 вопросов
+   ... пройдено 60/87, собрано 1433
+   /explan/ot_bki/forma-0420753/                           4 вопросов
+   /explan/ot_bki/forma-0420754/                          14 вопросов
+   /explan/ot_bki/forma-0420755/                          10 вопросов
+   /explan/ot_bki/forma-0420756/                           8 вопросов
+   /explan/otchetnost-po-forme-0409135-informaciya-ob-obyazatel-nykh-normativakh-i-o-drugikh-pokazatelyakh-deyatel-nosti-kreditnoy-organizacii-s-uchetom-svedeniy-predusmotrennykh-ukazaniem-banka-rossii-ot-20-04-2021-5782-u/    8 вопросов, акт 5782-У
+   /explan/otchetnost-po-forme-0409704-informaciya-o-dolgovoy-nagruzke-zaemschikov-fizicheskikh-lic-s-uchetom-svedeniy-predusmotrennykh-ukazaniem-banka-rossii-ot-20-04-2021-5782-u/   19 вопросов, акт 5782-У
+   /explan/pdrcb/                                         12 вопросов
+   /explan/pips_br/                                       35 вопросов
+   /explan/pnp/                                           25 вопросов
+   /explan/purcb/                                         53 вопросов
+   ... пройдено 80/87, собрано 1621
+
+собрано вопросов: 1621
+  из них с указанным в разделе актом: 324
+  из них ещё и с пунктами в теме:     127
+длина вопроса: медиана 254 символов
+файл: data/queries/explan_questions.jsonl

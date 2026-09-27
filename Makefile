@@ -14,7 +14,7 @@ PAUSE ?= 1.5
 CHUNKS ?= base
 DENSE ?= bge-m3
 
-.PHONY: help probe check-split check-bm25 check-alignment corpus chunks use-chunks kaggle bench metrics latency errors clean-raw
+.PHONY: help probe check-split check-bm25 check-alignment corpus chunks use-chunks explan explan-apply gold kaggle bench metrics latency errors clean-raw
 
 help:
 	@echo "Локально (памяти не требует):"
@@ -25,6 +25,9 @@ help:
 	@echo "  corpus       сбор корпуса: выпуски «Вестника» -> акты"
 	@echo "  chunks       нарезка актов на фрагменты (CONFIGS=base ...)"
 	@echo "  use-chunks   поставить нарезку, выгруженную с видеокарты (FILE=...)"
+	@echo "  explan       собрать живые вопросы из «Разъяснений» Банка России"
+	@echo "  explan-apply перенести проверенный выбор в разметку"
+	@echo "  gold         подобрать эталоны к вопросам, написанным руками"
 	@echo "  bench        сборка набора запросов и выгрузка в формате MTEB"
 	@echo "  metrics      метрики по выдачам, посчитанным на Kaggle (CHUNKS=$(CHUNKS))"
 	@echo "  errors       разбор провальных запросов"
@@ -69,6 +72,18 @@ kaggle:
 # Сборке разметки предшествует сверка нарезок: если под эталонным фрагментом
 # лежит не тот текст, по которому писался вопрос, метрики будут бессмысленны,
 # а заметить это по ним самим нельзя.
+# Живые вопросы: собираются с сайта Банка России, к ним подбираются кандидаты
+# в эталонный фрагмент, человек выбирает подходящий.
+explan:
+	$(PY) scripts/collect_explanations.py
+	$(PY) scripts/prepare_explan_queries.py --target 50
+
+explan-apply:
+	$(PY) scripts/apply_explan_choices.py
+
+gold:
+	$(PY) scripts/find_gold.py --file data/queries/manual_questions.txt
+
 bench: check-alignment
 	$(PY) scripts/build_benchmark.py
 

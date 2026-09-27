@@ -56,7 +56,9 @@ def main() -> None:
     if args.query:
         questions.append(args.query)
     if args.file:
-        questions += [l.strip() for l in open(args.file, encoding="utf-8") if l.strip()]
+        # строки, начинающиеся с решётки, — пояснения в файле, а не вопросы
+        questions += [l.strip() for l in open(args.file, encoding="utf-8")
+                      if l.strip() and not l.lstrip().startswith("#")]
     if not questions:
         ap.error("нужен --query или --file")
 
