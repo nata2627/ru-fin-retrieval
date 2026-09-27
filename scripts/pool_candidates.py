@@ -46,12 +46,19 @@ def load_runs(config: str) -> dict[str, dict[str, list[str]]]:
     return runs
 
 
-def pool(runs: dict[str, dict[str, list[str]]], qid: str, size: int) -> list[str]:
-    """По очереди с каждой конфигурации: первые места, потом вторые, и так далее."""
+def pool(runs: dict[str, dict[str, list[str]]], qid: str, size: int,
+         max_depth: int = 10) -> list[str]:
+    """По очереди с каждой конфигурации: первые места, потом вторые, и так далее.
+
+    Глубина ограничена: метрики считаются на первой десятке, и фрагмент,
+    не попавший туда ни у одной конфигурации, на них не влияет. Зато всё,
+    что хоть одна конфигурация ставит в первую десятку, обязано попасть
+    в пул — иначе её результат будет занижен из-за неразмеченного ответа.
+    """
     out: list[str] = []
     seen: set[str] = set()
     depth = 0
-    lists = [r.get(qid, []) for r in runs.values()]
+    lists = [r.get(qid, [])[:max_depth] for r in runs.values()]
     while len(out) < size and any(depth < len(l) for l in lists):
         for l in lists:
             if depth < len(l) and l[depth] not in seen:
@@ -68,7 +75,9 @@ def main() -> None:
     ap.add_argument("--config", default="base")
     ap.add_argument("--queries", default=os.path.join(QDIR, "queries.jsonl"))
     ap.add_argument("--chunks", default="base")
-    ap.add_argument("--size", type=int, default=8, help="кандидатов на запрос")
+    ap.add_argument("--size", type=int, default=14, help="кандидатов на запрос")
+    ap.add_argument("--depth", type=int, default=10,
+                    help="сколько верхних позиций брать с каждой выдачи")
     ap.add_argument("--out", default=os.path.join(QDIR, "pool_candidates.tsv"))
     args = ap.parse_args()
 
@@ -90,7 +99,7 @@ def main() -> None:
 
     rows = []
     for q in need:
-        cands = pool(runs, q["query_id"], args.size)
+        cands = pool(runs, q["query_id"], args.size, args.depth)
         if not cands:
             continue
         # перемешиваем, чтобы порядок не подсказывал ответ
