@@ -16,7 +16,9 @@ from __future__ import annotations
 
 import json
 import os
+import signal
 import time
+from contextlib import contextmanager
 
 import numpy as np
 
@@ -26,6 +28,27 @@ from rufin.retrieval.model_specs import MODELS
 
 TOP = 50          # глубина выдачи: уходит в реранкер и в разбор ошибок
 RERANKER = "BAAI/bge-reranker-v2-m3"
+# Сколько ждать одну модель. Скачивание с HuggingFace без токена режется
+# по скорости и может встать намертво: перехват исключений тут не помогает,
+# потому что зависание — не ошибка. Поэтому жёсткий будильник.
+MODEL_TIMEOUT = 600
+
+
+class ModelTimeout(RuntimeError):
+    pass
+
+
+@contextmanager
+def time_limit(seconds: int):
+    def ring(signum, frame):
+        raise ModelTimeout(f"не уложилось в {seconds} с")
+    old = signal.signal(signal.SIGALRM, ring)
+    signal.alarm(seconds)
+    try:
+        yield
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, old)
 
 
 def bm25_runs(chunks: list[dict], queries: list[dict]) -> tuple[dict, float]:
@@ -49,7 +72,8 @@ def dense_runs(emb_dir: str, model_name: str, queries: list[dict],
     meta = json.load(open(os.path.join(emb_dir, "meta.json"), encoding="utf-8"))
 
     spec = MODELS[model_name]
-    model = load_encoder(spec.path, device, spec.max_seq_length)
+    with time_limit(MODEL_TIMEOUT):
+        model = load_encoder(spec.path, device, spec.max_seq_length)
     texts = [spec.query_prefix + q["text"] for q in queries] if spec.query_prefix \
         else [q["text"] for q in queries]
     qvec = model.encode(texts, batch_size=batch_size, convert_to_numpy=True,
@@ -81,7 +105,8 @@ def rerank_runs(queries: list[dict], candidates: dict, texts: dict,
     import torch
 
     from gpu_common import load_cross_encoder
-    model = load_cross_encoder(model_path, device)
+    with time_limit(MODEL_TIMEOUT):
+        model = load_cross_encoder(model_path, device)
     out = {}
     t0 = time.time()
     for n, q in enumerate(queries, 1):

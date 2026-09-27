@@ -45,6 +45,11 @@ def main() -> None:
     ap.add_argument("--ablation-model", default=ABLATION)
     ap.add_argument("--ablation-configs", nargs="*",
                     default=[c.name for c in GRID if c.name != "base"])
+    ap.add_argument("--only", nargs="*", default=None,
+                    help="считать только названные нарезки; «base» даёт основную "
+                         "таблицу и укладывается в четверть часа")
+    ap.add_argument("--chunks-cache", default="/kaggle/working/chunks",
+                    help="куда складывать нарезки, чтобы не повторять их")
     ap.add_argument("--limit-acts", type=int, default=0)
     args = ap.parse_args()
 
@@ -104,10 +109,10 @@ def main() -> None:
                     f"tokenizers {versions['tokenizers']}). Выдачи были бы несопоставимы.")
             return
 
-    configs = ["base"] + list(args.ablation_configs)
+    configs = args.only or (["base"] + list(args.ablation_configs))
     for config in configs:
         print(f"\n=== нарезка {config} ===", flush=True)
-        chunks = common.build_chunks(acts, config, ruler)
+        chunks = common.build_chunks_cached(acts, config, ruler, args.chunks_cache)
         check_same_chunking(config, chunks)
         texts = {c["chunk_id"]: c["text"] for c in chunks}
 
@@ -141,8 +146,10 @@ def main() -> None:
                 continue
             try:
                 runs, meta = S.dense_runs(d, model, queries, device=device)
-            except Exception as e:  # noqa: BLE001
-                print(f"   {model}: ОШИБКА {e}", flush=True)
+            except (S.ModelTimeout, Exception) as e:  # noqa: BLE001
+                print(f"   {model}: ПРОПУСК — {type(e).__name__}: {e}", flush=True)
+                report.setdefault("skipped", []).append(
+                    {"config": config, "model": model, "reason": str(e)[:200]})
                 continue
             dense[model] = runs
             S.save_run(args.out, config, f"dense-{model}", runs)

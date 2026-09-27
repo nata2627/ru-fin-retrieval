@@ -100,6 +100,39 @@ def find_file(name: str, root: str = "/kaggle/input") -> str | None:
     return sorted(hits, key=len)[0] if hits else None
 
 
+def build_chunks_cached(acts: list[dict], config: str, ruler: TokenRuler,
+                        cache_dir: str | None) -> list[dict]:
+    """Нарезка с сохранением на диск.
+
+    Нарезка детерминирована и зависит только от корпуса и версии токенизатора,
+    но занимает минуты на каждую конфигурацию, и на видеокарте это время
+    простоя. Готовую кладём рядом: повторный прогон в той же сессии,
+    а при подключении вывода — и в следующей, её не пересчитывает.
+    """
+    if not cache_dir:
+        return build_chunks(acts, config, ruler)
+    os.makedirs(cache_dir, exist_ok=True)
+    path = os.path.join(cache_dir, f"{config}.jsonl")
+    if os.path.exists(path):
+        with open(path, encoding="utf-8") as f:
+            out = [json.loads(l) for l in f if l.strip()]
+        print(f"[нарезка {config}] взята готовая: {len(out)} фрагментов", flush=True)
+        return out
+    # уже посчитанная в другом прогоне и подключённая входом
+    ready = find_file(f"{config}.jsonl")
+    if ready and os.path.basename(os.path.dirname(ready)) == "chunks":
+        with open(ready, encoding="utf-8") as f:
+            out = [json.loads(l) for l in f if l.strip()]
+        print(f"[нарезка {config}] взята из входов: {ready}, {len(out)} фрагментов",
+              flush=True)
+        return out
+    out = build_chunks(acts, config, ruler)
+    with open(path, "w", encoding="utf-8") as f:
+        for c in out:
+            f.write(json.dumps(c, ensure_ascii=False) + "\n")
+    return out
+
+
 def pick_device() -> str:
     import torch
     return "cuda" if torch.cuda.is_available() else "cpu"

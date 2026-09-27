@@ -211,7 +211,7 @@ def main() -> None:
     p.add_argument("--slug", default=None)
     p.add_argument("--source", default="ru-fin",
                    help="ядро, чей вывод подключается: там лежат матрицы этапа A")
-    p.add_argument("--args", default="")
+    p.add_argument("--args", default="", help="аргументы скрипта этапа, строкой")
     p.add_argument("--no-wait", action="store_true")
 
     p = sub.add_parser("fetch", help="забрать результат")
