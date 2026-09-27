@@ -37,6 +37,7 @@ PACKAGE = [
 # скрипты, запускаемые в ноутбуке
 SCRIPTS = [
     "kaggle/gpu_common.py",
+    "kaggle/export_chunks.py",
     "kaggle/run_phase_a.py",
     "kaggle/run_phase_b.py",
     "kaggle/gpu_embed.py",
