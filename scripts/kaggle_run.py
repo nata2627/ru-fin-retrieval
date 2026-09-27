@@ -253,8 +253,12 @@ def main() -> None:
         slug = args.slug or slug
         if args.no_gpu:
             gpu = False
-            # отдельное имя: иначе прогон без карты перезапишет версию с картой
-            slug = f"{slug}-cpu" if not args.slug else slug
+            # Отдельное имя: иначе прогон без карты перезапишет версию с картой.
+            # Заголовок правим вместе со слагом — Kaggle требует, чтобы одно
+            # выводилось из другого, и иначе отказывается принимать ядро.
+            if not args.slug:
+                slug = f"{slug}-cpu"
+                title = f"{title} cpu"
         datasets = [f"{user}/{DATASET}"]
         if args.stage == "b":
             datasets.append(f"{user}/{QUERIES_DATASET}")

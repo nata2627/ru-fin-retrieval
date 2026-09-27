@@ -51,6 +51,9 @@ def main() -> None:
     ap.add_argument("--chunks-cache", default="/kaggle/working/chunks",
                     help="куда складывать нарезки, чтобы не повторять их")
     ap.add_argument("--limit-acts", type=int, default=0)
+    ap.add_argument("--no-rerank", action="store_true",
+                    help="без кросс-энкодера: остальное считается на процессоре "
+                         "и не ждёт свободной видеокарты")
     args = ap.parse_args()
 
     device = common.pick_device()
@@ -170,6 +173,9 @@ def main() -> None:
         report["runs"].append({"config": config, "retrieval": "hybrid"})
         print("   гибрид: выдача готова", flush=True)
 
+        if args.no_rerank:
+            print("   реранкер пропущен по ключу --no-rerank", flush=True)
+            continue
         reranked = S.rerank_runs(queries, hybrid, texts, device=device)
         S.save_run(args.out, config, "hybrid-rerank", reranked)
         report["runs"].append({"config": config, "retrieval": "hybrid+rerank"})
