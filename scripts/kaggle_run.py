@@ -213,6 +213,9 @@ def main() -> None:
                    help="ядро, чей вывод подключается: там лежат матрицы этапа A")
     p.add_argument("--args", default="", help="аргументы скрипта этапа, строкой")
     p.add_argument("--no-wait", action="store_true")
+    p.add_argument("--no-gpu", action="store_true",
+                   help="считать без видеокарты: квота GPU не тратится, а ядер "
+                        "процессора сессии достаётся больше")
 
     p = sub.add_parser("fetch", help="забрать результат")
     p.add_argument("slug")
@@ -245,6 +248,10 @@ def main() -> None:
         }
         script, slug, title, kernels, gpu = stages[args.stage]
         slug = args.slug or slug
+        if args.no_gpu:
+            gpu = False
+            # отдельное имя: иначе прогон без карты перезапишет версию с картой
+            slug = f"{slug}-cpu" if not args.slug else slug
         datasets = [f"{user}/{DATASET}"]
         if args.stage == "b":
             datasets.append(f"{user}/{QUERIES_DATASET}")
