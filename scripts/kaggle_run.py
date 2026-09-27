@@ -146,6 +146,15 @@ def push_kernel(user: str, slug: str, title: str, script: str, script_args: str,
     }
     with open(os.path.join(folder, "kernel-metadata.json"), "w", encoding="utf-8") as f:
         json.dump(meta, f, ensure_ascii=False, indent=1)
+    # Новая версия не отменяет запуск предыдущей: Kaggle оставляет обе считаться,
+    # и обе расходуют квоту. Отмены в клиенте нет, остановить можно только
+    # в браузере, поэтому хотя бы предупреждаем.
+    probe = run(["kaggle", "kernels", "status", f"{user}/{slug}"])
+    if "running" in (probe.stdout or "").lower():
+        print(f"  ВНИМАНИЕ: предыдущий запуск {user}/{slug} ещё идёт и после нового "
+              f"пуша продолжит считаться. Остановить можно только в браузере: "
+              f"меню «...» у нужной версии -> Stop.")
+
     r = run(["kaggle", "kernels", "push", "-p", folder])
     print((r.stdout or r.stderr).strip())
     if r.returncode != 0:
