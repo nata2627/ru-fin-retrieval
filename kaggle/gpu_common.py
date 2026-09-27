@@ -92,12 +92,28 @@ def find_embeddings(root: str = "/kaggle/input") -> str | None:
 def find_file(name: str, root: str = "/kaggle/input") -> str | None:
     """Найти файл среди подключённых входов.
 
-    Датасеты и вывод ядер монтируются на разной глубине: вывод ядра лежит
+    Два правила Kaggle, на которых проект терял время не раз, и потому
+    ни один путь здесь не задаётся жёстко.
+
+    Первое: входы монтируются на разной глубине. Вывод ядра лежит
     в /kaggle/input/<ядро>/, а датасет — в /kaggle/input/datasets/<кто>/<что>/.
-    Поэтому путь не задаётся, а файл ищется по имени.
+    Поэтому обход идёт по дереву, а не по известному пути.
+
+    Второе: при создании датасета Kaggle распаковывает архивы. Файл,
+    загруженный как chunks_base.jsonl.gz, окажется chunks_base.jsonl,
+    а загруженный папкой может приехать и распакованным zip-ом. Поэтому
+    имя ищется в обоих видах — со сжатием и без.
     """
-    hits = glob.glob(os.path.join(root, "**", name), recursive=True)
-    return sorted(hits, key=len)[0] if hits else None
+    names = [name]
+    if name.endswith(".gz"):
+        names.append(name[:-3])
+    else:
+        names.append(name + ".gz")
+    for candidate in names:
+        hits = glob.glob(os.path.join(root, "**", candidate), recursive=True)
+        if hits:
+            return sorted(hits, key=len)[0]
+    return None
 
 
 def build_chunks_cached(acts: list[dict], config: str, ruler: TokenRuler,

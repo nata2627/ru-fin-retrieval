@@ -227,7 +227,7 @@ def main() -> None:
     p = sub.add_parser("queries", help="загрузить набор запросов")
 
     p = sub.add_parser("run", help="собрать ноутбук, запустить и дождаться")
-    p.add_argument("stage", choices=["a", "b", "export"])
+    p.add_argument("stage", choices=["a", "b", "export", "rerank"])
     p.add_argument("--slug", default=None)
     p.add_argument("--source", default="ru-fin",
                    help="ядро, чей вывод подключается: там лежат матрицы этапа A")
@@ -254,11 +254,28 @@ def main() -> None:
         push_dataset(user, PKG, DATASET, "ru-fin-retrieval", args.message)
 
     elif args.cmd == "queries":
+        # Вместе с запросами уезжает то, что нужно маленьким прогонам:
+        # готовые выдачи и фрагменты базовой нарезки. Так переранжирование
+        # обходится без повторной нарезки корпуса.
         folder = os.path.join(DIST, "queries")
         shutil.rmtree(folder, ignore_errors=True)
         os.makedirs(folder)
         shutil.copy2(os.path.join(ROOT, "data", "queries", "queries.jsonl"), folder)
-        push_dataset(user, folder, QUERIES_DATASET, "ru-fin-queries", "набор запросов")
+        for name in ("base__bm25.jsonl", "base__dense-bge-m3.jsonl", "base__hybrid.jsonl"):
+            src = os.path.join(ROOT, "data", "runs", name)
+            if os.path.exists(src):
+                shutil.copy2(src, folder)
+        chunks = os.path.join(ROOT, "data", "chunks", "base.jsonl")
+        if os.path.exists(chunks):
+            import gzip
+            with open(chunks, "rb") as fi, gzip.open(
+                    os.path.join(folder, "chunks_base.jsonl.gz"), "wb", compresslevel=6) as fo:
+                shutil.copyfileobj(fi, fo, length=1 << 20)
+        total = sum(os.path.getsize(os.path.join(folder, f)) for f in os.listdir(folder))
+        print(f"в датасет уходит {len(os.listdir(folder))} файлов, "
+              f"{total / 1048576:.0f} МБ")
+        push_dataset(user, folder, QUERIES_DATASET, "ru-fin-queries",
+                     "запросы, готовые выдачи и фрагменты")
 
     elif args.cmd == "run":
         # вывод этапа A подключается как источник: там лежат матрицы эмбеддингов
@@ -268,6 +285,9 @@ def main() -> None:
             "export": ("export_chunks.py", "ru-fin-export-chunks", "ru-fin export chunks",
                        source, True),
             "b": ("run_phase_b.py", "ru-fin-phase-b", "ru-fin phase B", source, True),
+            # Переранжирование отдельным маленьким прогоном: всё остальное
+            # уже посчитано, и повторять его незачем.
+            "rerank": ("gpu_rerank.py", "ru-fin-rerank-only", "ru fin rerank only", [], True),
         }
         script, slug, title, kernels, gpu = stages[args.stage]
         if args.slug:
@@ -284,7 +304,7 @@ def main() -> None:
                 slug = f"{slug}-cpu"
                 title = f"{title} cpu"
         datasets = [f"{user}/{DATASET}"]
-        if args.stage == "b":
+        if args.stage in ("b", "rerank"):
             datasets.append(f"{user}/{QUERIES_DATASET}")
         ref = push_kernel(user, slug, title, script, args.args, datasets, kernels,
                           gpu, args.machine)
