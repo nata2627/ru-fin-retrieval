@@ -70,6 +70,25 @@ def build_chunks(acts: list[dict], config: str, ruler: TokenRuler) -> list[dict]
     return out
 
 
+def find_embeddings(root: str = "/kaggle/input") -> str | None:
+    """Найти папку с матрицами эмбеддингов среди подключённых входов.
+
+    Вывод ноутбука Kaggle монтирует не там же, где датасеты, и глубина пути
+    заранее не известна. Поэтому ищем не по имени папки, а по содержимому:
+    рядом с каждой матрицей лежит ids.txt, и его дед по дереву — искомый
+    корень «эмбеддинги / нарезка / модель».
+    """
+    marks = glob.glob(os.path.join(root, "**", "ids.txt"), recursive=True)
+    roots: dict[str, int] = {}
+    for m in marks:
+        candidate = os.path.dirname(os.path.dirname(os.path.dirname(m)))
+        roots[candidate] = roots.get(candidate, 0) + 1
+    if not roots:
+        return None
+    # если корней несколько, берём тот, где матриц больше
+    return max(roots.items(), key=lambda kv: kv[1])[0]
+
+
 def pick_device() -> str:
     import torch
     return "cuda" if torch.cuda.is_available() else "cpu"

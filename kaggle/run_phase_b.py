@@ -36,7 +36,8 @@ def main() -> None:
     ap.add_argument("--acts", default=None,
                     help="путь к корпусу; по умолчанию ищется сам")
     ap.add_argument("--queries", default="/kaggle/input/ru-fin-queries/queries.jsonl")
-    ap.add_argument("--embeddings", default="/kaggle/input/ru-fin-embeddings/embeddings")
+    ap.add_argument("--embeddings", default=None,
+                    help="папка с матрицами этапа A; по умолчанию ищется сама")
     ap.add_argument("--out", default="/kaggle/working/runs")
     ap.add_argument("--headline-models", nargs="*", default=list(HEADLINE))
     ap.add_argument("--hybrid-dense", default="bge-m3")
@@ -50,6 +51,11 @@ def main() -> None:
     print(f"устройство: {device}", flush=True)
     ruler = common.make_ruler()
     acts = common.load_acts(args.acts, limit=args.limit_acts)
+    embeddings = args.embeddings or common.find_embeddings()
+    if embeddings is None:
+        raise SystemExit("не найдены матрицы этапа A: подключите его вывод "
+                         "через + Add Input -> Your Work")
+    print("эмбеддинги этапа A:", embeddings, flush=True)
     queries = [json.loads(l) for l in open(args.queries, encoding="utf-8") if l.strip()]
     print(f"актов {len(acts)}, запросов {len(queries)}", flush=True)
 
@@ -65,7 +71,7 @@ def main() -> None:
                     "runs": [], "index": {}}
 
     def emb_dir(config: str, model: str) -> str | None:
-        d = os.path.join(args.embeddings, config, model)
+        d = os.path.join(embeddings, config, model)
         return d if os.path.exists(os.path.join(d, "vectors.npy")) else None
 
     def check_same_chunking(config: str, chunks: list[dict]) -> None:
@@ -77,9 +83,9 @@ def main() -> None:
         другим. Ошибки при этом не возникнет — выдачи молча окажутся
         несопоставимыми. Поэтому сверяем списки имён целиком.
         """
-        for model in os.listdir(os.path.join(args.embeddings, config)) \
-                if os.path.isdir(os.path.join(args.embeddings, config)) else []:
-            ids_path = os.path.join(args.embeddings, config, model, "ids.txt")
+        for model in os.listdir(os.path.join(embeddings, config)) \
+                if os.path.isdir(os.path.join(embeddings, config)) else []:
+            ids_path = os.path.join(embeddings, config, model, "ids.txt")
             if not os.path.exists(ids_path):
                 continue
             with open(ids_path, encoding="utf-8") as f:

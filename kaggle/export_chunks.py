@@ -46,11 +46,7 @@ def main() -> None:
     import transformers as _tf
     print(f"transformers {_tf.__version__}, tokenizers {_tk.__version__}", flush=True)
 
-    embeddings = args.embeddings
-    if embeddings is None:
-        found = sorted(glob.glob("/kaggle/input/*/embeddings")) \
-            + sorted(glob.glob("/kaggle/input/*/*/embeddings"))
-        embeddings = found[0] if found else None
+    embeddings = args.embeddings or common.find_embeddings()
     if embeddings is None:
         raise SystemExit("не найдена папка embeddings этапа A: подключите его вывод "
                          "через + Add Input -> Your Work")
