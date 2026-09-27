@@ -149,7 +149,7 @@ def main() -> None:
                 continue
             try:
                 runs, meta = S.dense_runs(d, model, queries, device=device)
-            except (S.ModelTimeout, Exception) as e:  # noqa: BLE001
+            except (S.ModelTimeout, Exception) as e:  # noqa: BLE001  BaseException ловим намеренно
                 print(f"   {model}: ПРОПУСК — {type(e).__name__}: {e}", flush=True)
                 report.setdefault("skipped", []).append(
                     {"config": config, "model": model, "reason": str(e)[:200]})

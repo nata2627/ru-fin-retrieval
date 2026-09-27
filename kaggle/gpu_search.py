@@ -32,10 +32,19 @@ RERANKER = "BAAI/bge-reranker-v2-m3"
 # по скорости и может встать намертво: перехват исключений тут не помогает,
 # потому что зависание — не ошибка. Поэтому жёсткий будильник.
 MODEL_TIMEOUT = 600
+# Заодно ограничиваем ожидание самого клиента HuggingFace: по умолчанию
+# он готов ждать ответа очень долго и повторять попытки.
+os.environ.setdefault("HF_HUB_DOWNLOAD_TIMEOUT", "60")
+os.environ.setdefault("HF_HUB_ETAG_TIMEOUT", "30")
 
 
-class ModelTimeout(RuntimeError):
-    pass
+class ModelTimeout(BaseException):
+    """Наследник BaseException намеренно.
+
+    Скачивание с HuggingFace обёрнуто повторными попытками, и те ловят
+    Exception. Обычное исключение из будильника они проглатывали, и прогон
+    продолжал ждать. BaseException сквозь такие перехваты проходит.
+    """
 
 
 @contextmanager

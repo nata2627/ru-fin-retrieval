@@ -84,6 +84,19 @@ def notebook_from_script(script: str, args_line: str) -> dict:
     setup = [
         "import glob, os, shutil, subprocess, sys, zipfile\n",
         "\n",
+        "# Без токена HuggingFace режет скорость скачивания, и на больших моделях\n",
+        "# это превращается в многочасовое ожидание. Токен кладётся в секреты\n",
+        "# ноутбука под именем HF_TOKEN; переменная наследуется дочерним процессом.\n",
+        "# Имён два: у библиотеки старое HUGGING_FACE_HUB_TOKEN и новое HF_TOKEN.\n",
+        "try:\n",
+        "    from kaggle_secrets import UserSecretsClient\n",
+        "    _tok = UserSecretsClient().get_secret('HF_TOKEN')\n",
+        "    os.environ['HF_TOKEN'] = _tok\n",
+        "    os.environ['HUGGING_FACE_HUB_TOKEN'] = _tok\n",
+        "    print('токен HuggingFace подключён')\n",
+        "except Exception as e:\n",
+        "    print('токен HuggingFace недоступен, скачивание будет медленным:', e)\n",
+        "\n",
         "subprocess.run([sys.executable, '-m', 'pip', 'install', '-q', '-U',\n",
         "                'sentence-transformers'], check=False)\n",
         "\n",
@@ -141,16 +154,20 @@ def notebook_from_script(script: str, args_line: str) -> dict:
 
 def push_kernel(user: str, slug: str, title: str, script: str, script_args: str,
                 dataset_sources: list[str], kernel_sources: list[str],
-                gpu: bool = True) -> str:
+                gpu: bool = True, machine: str = "") -> str:
     folder = os.path.join(DIST, "kernel_" + slug)
     shutil.rmtree(folder, ignore_errors=True)
     os.makedirs(folder)
     with open(os.path.join(folder, "run.ipynb"), "w", encoding="utf-8") as f:
         json.dump(notebook_from_script(script, script_args), f, ensure_ascii=False, indent=1)
+    # machine_shape задаёт конфигурацию узла. Пустое значение означает выбор
+    # по умолчанию — узел с двумя T4, который дефицитнее и потому дольше ждёт
+    # очереди. Наш код работает с одной картой, поэтому просим одиночную.
     meta = {
         "id": f"{user}/{slug}", "title": title, "code_file": "run.ipynb",
         "language": "python", "kernel_type": "notebook", "is_private": True,
-        "enable_gpu": gpu, "enable_internet": True,
+        "enable_gpu": gpu, "enable_tpu": False, "enable_internet": True,
+        "machine_shape": machine,
         "dataset_sources": dataset_sources, "kernel_sources": kernel_sources,
         "competition_sources": [], "model_sources": [],
     }
@@ -216,6 +233,9 @@ def main() -> None:
                    help="ядро, чей вывод подключается: там лежат матрицы этапа A")
     p.add_argument("--args", default="", help="аргументы скрипта этапа, строкой")
     p.add_argument("--no-wait", action="store_true")
+    p.add_argument("--machine", default="p100",
+                   help="конфигурация узла: p100 — одна карта, быстрее получить; "
+                        "пусто — по умолчанию T4 x2, дефицитнее")
     p.add_argument("--no-gpu", action="store_true",
                    help="считать без видеокарты: квота GPU не тратится, а ядер "
                         "процессора сессии достаётся больше")
@@ -250,7 +270,11 @@ def main() -> None:
             "b": ("run_phase_b.py", "ru-fin-phase-b", "ru-fin phase B", source, True),
         }
         script, slug, title, kernels, gpu = stages[args.stage]
-        slug = args.slug or slug
+        if args.slug:
+            # Kaggle требует, чтобы заголовок приводился к слагу, иначе
+            # отказывается принимать ядро
+            slug = args.slug
+            title = args.slug.replace("-", " ")
         if args.no_gpu:
             gpu = False
             # Отдельное имя: иначе прогон без карты перезапишет версию с картой.
@@ -262,7 +286,8 @@ def main() -> None:
         datasets = [f"{user}/{DATASET}"]
         if args.stage == "b":
             datasets.append(f"{user}/{QUERIES_DATASET}")
-        ref = push_kernel(user, slug, title, script, args.args, datasets, kernels, gpu)
+        ref = push_kernel(user, slug, title, script, args.args, datasets, kernels,
+                          gpu, args.machine)
         if not args.no_wait:
             state = wait(ref)
             print(f"\nсостояние: {state}")
