@@ -25,8 +25,8 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from rufin.benchmark import read_qrels                # noqa: E402
-from rufin.retrieval.text import tokenize             # noqa: E402
+from rufin.benchmark import read_qrels  # noqa: E402
+from rufin.retrieval.text import tokenize  # noqa: E402
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 RUNDIR = os.path.join(ROOT, "data", "runs")

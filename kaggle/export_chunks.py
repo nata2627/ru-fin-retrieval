@@ -25,7 +25,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-import gpu_common as common          # noqa: E402
+import gpu_common as common  # noqa: E402
 
 
 def find_ids_file(embeddings: str, config: str) -> str | None:

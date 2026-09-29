@@ -21,9 +21,9 @@ import tempfile
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from rufin.http import Client                              # noqa: E402
-from rufin.sources import cbr_vestnik as vb                # noqa: E402
-from rufin.vestnik_split import split_issue, normalize_number  # noqa: E402
+from rufin.http import Client  # noqa: E402
+from rufin.sources import cbr_vestnik as vb  # noqa: E402
+from rufin.vestnik_split import normalize_number, split_issue  # noqa: E402
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 INDEX = os.path.join(ROOT, "data", "index", "cbr_vestnik_acts.jsonl")
@@ -94,7 +94,7 @@ def main() -> None:
     os.makedirs(os.path.dirname(RAW), exist_ok=True)
     with open(RAW, "w", encoding="utf-8") as f:
         f.write("\n".join(lines) + "\n")
-    print(f"\nсырой вывод: docs/raw/validate_split.txt")
+    print("\nсырой вывод: docs/raw/validate_split.txt")
 
 
 if __name__ == "__main__":

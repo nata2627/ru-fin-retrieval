@@ -23,7 +23,6 @@ from contextlib import contextmanager
 import numpy as np
 
 from rufin.retrieval.bm25 import BM25Index
-from rufin.retrieval.hybrid import rrf
 from rufin.retrieval.model_specs import MODELS
 
 TOP = 50          # глубина выдачи: уходит в реранкер и в разбор ошибок
@@ -73,7 +72,6 @@ def bm25_runs(chunks: list[dict], queries: list[dict]) -> tuple[dict, float]:
 def dense_runs(emb_dir: str, model_name: str, queries: list[dict],
                batch_size: int = 64, device: str = "cuda") -> tuple[dict, dict]:
     import torch
-
     from gpu_common import load_encoder
 
     vec = np.load(os.path.join(emb_dir, "vectors.npy"))
@@ -112,7 +110,6 @@ def rerank_runs(queries: list[dict], candidates: dict, texts: dict,
                 model_path: str = RERANKER, batch_size: int = 32,
                 device: str = "cuda") -> dict:
     import torch
-
     from gpu_common import load_cross_encoder
     with time_limit(MODEL_TIMEOUT):
         model = load_cross_encoder(model_path, device)

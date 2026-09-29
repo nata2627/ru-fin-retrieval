@@ -16,16 +16,16 @@ import collections
 import json
 import os
 import random
-import re
 import statistics
 import sys
 import tempfile
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from rufin.http import Client                                    # noqa: E402
-from rufin.pdftext import extract                                # noqa: E402
-from rufin.sources import cbr_lawacts as la, cbr_vestnik as vb   # noqa: E402
+from rufin.http import Client  # noqa: E402
+from rufin.pdftext import extract  # noqa: E402
+from rufin.sources import cbr_lawacts as la  # noqa: E402
+from rufin.sources import cbr_vestnik as vb
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 RAW = os.path.join(ROOT, "docs", "raw")

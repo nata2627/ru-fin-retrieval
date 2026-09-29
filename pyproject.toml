@@ -1,0 +1,76 @@
+# Пакет ставится редактируемым: `pip install -e ".[dev]"`.
+#
+# Зависимости разделены намеренно. В основной набор входит только то, что
+# нужно на маке: сбор корпуса, нарезка, BM25, метрики, бутстрэп. Torch,
+# sentence-transformers и faiss вынесены в дополнение `dense`, потому что
+# плотный поиск и переранжирование считаются на видеокарте Kaggle, а не
+# здесь. Тесты и проверка стиля не требуют ни того, ни другого — поэтому
+# CI поднимается за полминуты и не тянет двухгигабайтный torch.
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rufin"
+version = "0.2.0"
+description = "Бенчмарк поиска по нормативным актам Банка России и дообученный на нём ретривер"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { file = "LICENSE" }
+
+dependencies = [
+    "requests>=2.31",
+    "numpy>=1.26,<2",
+    "pandas>=2.2",
+    "scipy>=1.13",
+]
+
+[project.optional-dependencies]
+# нужно только там, где считаются эмбеддинги и переранжирование
+dense = [
+    "torch>=2.3",
+    "sentence-transformers>=3.0",
+    "transformers>=4.41",
+    "faiss-cpu>=1.8",
+]
+# обучение: запускается на Kaggle, локально не ставится
+train = [
+    "accelerate>=0.30",
+    "datasets>=2.19",
+    "peft>=0.11",
+]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.5",
+    "rank-bm25==0.2.2",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = "-q --strict-markers"
+markers = [
+    "data: требует собранных данных в data/; пропускается, если их нет",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+extend-exclude = ["notebooks", "dist"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I"]
+# E501 не включаем: комментарии здесь русские и развёрнутые, ширину держим
+# глазами, а не линтером; переносить объяснение ради двух знаков — хуже.
+# E741 — про имена вроде `l`, которые можно спутать с единицей. В этом коде
+# `l` везде означает «строка» и живёт внутри однострочных выражений над
+# страницами PDF; переименовать сорок таких мест значит тронуть разбор
+# «Вестника» ради правила, которое здесь ничего не ловит.
+ignore = ["E501", "E741"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["rufin"]

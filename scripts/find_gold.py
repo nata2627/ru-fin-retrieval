@@ -19,8 +19,8 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from rufin.retrieval.bm25 import BM25Index             # noqa: E402
-from rufin.retrieval.hybrid import rrf                 # noqa: E402
+from rufin.retrieval.bm25 import BM25Index  # noqa: E402
+from rufin.retrieval.hybrid import rrf  # noqa: E402
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 CHUNKDIR = os.path.join(ROOT, "data", "chunks")

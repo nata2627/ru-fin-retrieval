@@ -164,6 +164,7 @@ def half_kwargs(device: str) -> dict:
     if device == "cpu":
         return {}
     import inspect
+
     import torch
     from transformers import AutoModel
     name = "dtype" if "dtype" in inspect.signature(

@@ -22,9 +22,9 @@ import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from rufin.http import Client                                  # noqa: E402
-from rufin.sources import cbr_vestnik as vb                    # noqa: E402
-from rufin.vestnik_split import split_issue, normalize_number  # noqa: E402
+from rufin.http import Client  # noqa: E402
+from rufin.sources import cbr_vestnik as vb  # noqa: E402
+from rufin.vestnik_split import normalize_number, split_issue  # noqa: E402
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 INDEX = os.path.join(ROOT, "data", "index", "cbr_vestnik_acts.jsonl")

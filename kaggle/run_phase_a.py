@@ -22,9 +22,10 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-import gpu_common as common              # noqa: E402
-from gpu_embed import embed_config       # noqa: E402
-from rufin.chunk_configs import GRID     # noqa: E402
+import gpu_common as common  # noqa: E402
+from gpu_embed import embed_config  # noqa: E402
+
+from rufin.chunk_configs import GRID  # noqa: E402
 from rufin.retrieval.model_specs import ABLATION, HEADLINE  # noqa: E402
 
 

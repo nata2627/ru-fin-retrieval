@@ -17,7 +17,7 @@ import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from rufin.chunk_configs import GRID              # noqa: E402
+from rufin.chunk_configs import GRID  # noqa: E402
 from rufin.chunking import TokenRuler, chunk_act  # noqa: E402
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -75,7 +75,7 @@ def main() -> None:
 
     with open(REPORT, "w", encoding="utf-8") as f:
         f.write("\n".join(lines) + "\n")
-    say(f"\nчанки: data/chunks/, отчёт: docs/raw/build_chunks.txt")
+    say("\nчанки: data/chunks/, отчёт: docs/raw/build_chunks.txt")
 
 
 if __name__ == "__main__":

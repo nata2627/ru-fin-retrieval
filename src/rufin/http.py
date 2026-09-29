@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import time
+
 import requests
 
 # заголовки HTTP передаются в latin-1, поэтому строка только из ASCII

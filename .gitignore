@@ -11,18 +11,24 @@ qdrant_storage/
 
 __pycache__/
 *.py[cod]
+*.egg-info/
+build/
+.pytest_cache/
+.ruff_cache/
 .venv/
 venv/
 .env
 
 .DS_Store
 .ipynb_checkpoints/
+# Нарезка и корпус пересобираются скриптом из выпусков «Вестника», выдачи —
+# прогоном на видеокарте. Воспроизводимое в репозиторий не кладём.
+# Исключение — data/queries/: разметку воспроизвести нельзя, она там и лежит.
 data/chunks/
 data/corpus/acts.jsonl
 data/runs/
 data/results/
 data/embeddings/
-data/queries/
 dist/
 
 # личные заметки по проекту в публичный репозиторий не идут

@@ -17,7 +17,6 @@ from rufin.retrieval.model_specs import MODELS
 
 def encode(model_name: str, texts: list[str], batch_size: int, device: str) -> np.ndarray:
     import torch
-
     from gpu_common import load_encoder
     spec = MODELS[model_name]
     model = load_encoder(spec.path, device, spec.max_seq_length)

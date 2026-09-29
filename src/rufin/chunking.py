@@ -16,7 +16,7 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, asdict
+from dataclasses import asdict, dataclass
 from typing import Iterator, Sequence
 
 # заголовки разделов внутри акта

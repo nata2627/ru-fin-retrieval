@@ -18,7 +18,6 @@ import collections
 import json
 import os
 import re
-import sys
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 QDIR = os.path.join(ROOT, "data", "queries")

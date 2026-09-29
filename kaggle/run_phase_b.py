@@ -22,13 +22,14 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-import gzip                                                   # noqa: E402
+import gzip  # noqa: E402
 
-import gpu_common as common                                   # noqa: E402
-import gpu_search as S                                        # noqa: E402
-from rufin.chunk_configs import GRID                          # noqa: E402
-from rufin.retrieval.hybrid import rrf                        # noqa: E402
-from rufin.retrieval.model_specs import ABLATION, HEADLINE    # noqa: E402
+import gpu_common as common  # noqa: E402
+import gpu_search as S  # noqa: E402
+
+from rufin.chunk_configs import GRID  # noqa: E402
+from rufin.retrieval.hybrid import rrf  # noqa: E402
+from rufin.retrieval.model_specs import ABLATION, HEADLINE  # noqa: E402
 
 
 def main() -> None:
@@ -186,9 +187,9 @@ def main() -> None:
         json.dump(report, f, ensure_ascii=False, indent=1)
 
     total = sum(os.path.getsize(os.path.join(args.out, f)) for f in os.listdir(args.out))
-    print(f"\n==== итог этапа B ====", flush=True)
+    print("\n==== итог этапа B ====", flush=True)
     print(f"выдач сохранено: {len(report['runs'])}, суммарно {total / 1048576:.1f} МБ", flush=True)
-    print(f"скачать всю папку runs и положить в проект как data/runs", flush=True)
+    print("скачать всю папку runs и положить в проект как data/runs", flush=True)
 
 
 if __name__ == "__main__":

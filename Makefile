@@ -14,9 +14,13 @@ PAUSE ?= 1.5
 CHUNKS ?= base
 DENSE ?= bge-m3
 
-.PHONY: help probe check-split check-bm25 check-alignment corpus chunks use-chunks explan explan-apply gold gold-apply queries pool kaggle bench metrics latency errors clean-raw
+.PHONY: help test lint probe check-split check-bm25 check-alignment corpus chunks use-chunks explan explan-apply gold gold-apply queries pool kaggle bench metrics latency errors clean-raw
 
 help:
+	@echo "Проверки (ни данных, ни видеокарты не требуют):"
+	@echo "  test         тесты: pytest"
+	@echo "  lint         проверка стиля: ruff"
+	@echo ""
 	@echo "Локально (памяти не требует):"
 	@echo "  probe        разведка источников: доступность, объём, качество текстового слоя"
 	@echo "  check-split  проверка нарезки выпусков «Вестника» на отдельные акты"
@@ -40,6 +44,13 @@ help:
 	@echo "  kaggle       собрать пакет для загрузки (dist/kaggle, ~20 МБ)"
 	@echo "               этап A: синтетические запросы и эмбеддинги"
 	@echo "               этап B: выдачи всех поисковых конфигураций"
+
+# Тесты на собранных данных помечены `data` и пропускаются, если данных нет.
+test:
+	$(PY) -m pytest
+
+lint:
+	$(PY) -m ruff check src tests scripts kaggle
 
 probe:
 	$(PY) scripts/probe_sources.py --sample $(SAMPLE) --pause $(PAUSE) $(if $(REFRESH),--refresh,)
