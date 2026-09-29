@@ -12,9 +12,10 @@ SAMPLE ?= 12
 ISSUES ?= 25
 PAUSE ?= 1.5
 CHUNKS ?= base
+FROM ?= base
 DENSE ?= bge-m3
 
-.PHONY: help test lint probe check-split check-bm25 check-alignment corpus chunks use-chunks explan explan-apply gold gold-apply queries pool kaggle bench metrics latency errors clean-raw
+.PHONY: help test lint probe check-split check-bm25 check-alignment remap corpus chunks use-chunks explan explan-apply gold gold-apply queries pool kaggle bench metrics latency errors clean-raw
 
 help:
 	@echo "Проверки (ни данных, ни видеокарты не требуют):"
@@ -26,6 +27,7 @@ help:
 	@echo "  check-split  проверка нарезки выпусков «Вестника» на отдельные акты"
 	@echo "  check-bm25   сверка своей реализации BM25 с rank_bm25"
 	@echo "  check-alignment  сверка: тот ли текст под эталонным фрагментом"
+	@echo "  remap        перенести эталоны на другую нарезку (CHUNKS=size-256)"
 	@echo "  corpus       сбор корпуса: выпуски «Вестника» -> акты"
 	@echo "  chunks       нарезка актов на фрагменты (CONFIGS=base ...)"
 	@echo "  use-chunks   поставить нарезку, выгруженную с видеокарты (FILE=...)"
@@ -63,6 +65,12 @@ check-bm25:
 
 check-alignment:
 	$(PY) scripts/check_alignment.py --chunks $(CHUNKS)
+
+# Эталон записан идентификатором фрагмента, а нумерация у каждой нарезки своя.
+# Без переноса метрики по другой нарезке выйдут нулевыми — и ноль будет
+# означать «эталона тут нет», а не «нарезка плохая».
+remap:
+	$(PY) scripts/remap_qrels.py --from $(FROM) --to $(CHUNKS)
 
 corpus:
 	$(PY) scripts/build_corpus.py --pause $(PAUSE)

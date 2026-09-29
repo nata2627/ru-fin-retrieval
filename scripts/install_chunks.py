@@ -55,6 +55,15 @@ def main() -> None:
 
     if args.no_check:
         return
+    if args.config != "base":
+        # Сверка опирается на цепочку слов, общую у вопроса и его фрагмента,
+        # а вопросы писались по базовой нарезке. У любой другой нарезки под
+        # тем же именем лежит другой текст — это не сбой, а её устройство.
+        # Эталоны на неё переносятся отдельно: scripts/remap_qrels.py.
+        print("\nсверка с запросами пропущена: она осмысленна только для базовой "
+              "нарезки.\nЭталоны переносятся командой "
+              f"`make remap CHUNKS={args.config}`.")
+        return
     queries = os.path.join(ROOT, "data", "queries", "synthetic.jsonl")
     if not os.path.exists(queries):
         print("\nзапросов ещё нет, сверка пропущена")

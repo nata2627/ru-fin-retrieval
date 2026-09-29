@@ -42,6 +42,28 @@ def sort_key(name: str) -> tuple:
     return (len(ORDER), name)
 
 
+def resolve_qrels(config: str) -> str:
+    """Какую разметку брать для этой нарезки.
+
+    Эталон записан идентификатором фрагмента, а нумерация у каждой нарезки
+    своя: с разметкой базовой нарезки любая другая честно покажет нули, и ноль
+    этот будет означать «эталона тут нет», а не «нарезка плохая». Поэтому для
+    неосновных нарезок нужен перенос, и без него скрипт не считает вовсе —
+    молчаливый ноль здесь опаснее отказа.
+    """
+    if config == "base":
+        return os.path.join(QDIR, "qrels.tsv")
+    moved = os.path.join(QDIR, f"qrels_{config}.tsv")
+    if os.path.exists(moved):
+        return moved
+    raise SystemExit(
+        f"для нарезки «{config}» нет перенесённой разметки "
+        f"({os.path.relpath(moved, ROOT)}).\n"
+        f"Считать по data/queries/qrels.tsv нельзя: там эталоны базовой нарезки, "
+        f"и метрики выйдут нулевыми не из-за качества поиска.\n"
+        f"Сделать перенос: python3 scripts/remap_qrels.py --to {config}")
+
+
 def load_runs(config: str) -> dict[str, dict[str, list[str]]]:
     """Прочитать выдачи одной нарезки: файлы вида <нарезка>__<конфигурация>.jsonl."""
     out: dict[str, dict[str, list[str]]] = {}
@@ -64,13 +86,17 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--config", default="base", help="какая нарезка")
     ap.add_argument("--queries", default=os.path.join(QDIR, "queries.jsonl"))
-    ap.add_argument("--qrels", default=os.path.join(QDIR, "qrels.tsv"))
+    ap.add_argument("--qrels", default=None,
+                    help="разметка; по умолчанию qrels.tsv для базовой нарезки "
+                         "и qrels_<нарезка>.tsv для остальных")
     ap.add_argument("--baseline", default="bm25")
     ap.add_argument("--phase-b-report", default=os.path.join(RUNDIR, "report_phase_b.json"))
     args = ap.parse_args()
 
     os.makedirs(RESDIR, exist_ok=True)
     os.makedirs(RAW, exist_ok=True)
+
+    qrels_path = args.qrels or resolve_qrels(args.config)
 
     runs = load_runs(args.config)
     if not runs:
@@ -79,7 +105,7 @@ def main() -> None:
         return
 
     queries = [json.loads(l) for l in open(args.queries, encoding="utf-8") if l.strip()]
-    qrels = read_qrels(args.qrels)
+    qrels = read_qrels(qrels_path)
     known = {q["query_id"] for q in queries} & set(qrels)
     origins: dict[str, int] = {}
     for q in queries:
@@ -93,6 +119,7 @@ def main() -> None:
         report.append(s)
 
     say(f"нарезка: {args.config}")
+    say(f"разметка: {os.path.relpath(qrels_path, ROOT)}")
     say(f"запросов с разметкой: {len(known)}  "
         f"({', '.join(f'{k}: {v}' for k, v in sorted(origins.items()))})")
     syn = origins.get("синтетический", 0)
@@ -136,7 +163,8 @@ def main() -> None:
             for k, v in rows.items():
                 say(f"   {k:<26} {v}")
 
-    result = {"config": args.config, "queries": len(known), "origins": origins,
+    result = {"config": args.config, "qrels": os.path.relpath(qrels_path, ROOT),
+              "queries": len(known), "origins": origins,
               "metrics": {cfg: {n: M.bootstrap_ci(pq[n]).__dict__ for n in names}
                           for cfg, pq in per_q.items()},
               "index": index_info}

@@ -28,6 +28,9 @@ data/chunks/
 data/corpus/acts.jsonl
 data/runs/
 data/results/
+# сюда kaggle_run.py складывает скачанный вывод ядра целиком,
+# вместе с корпусом и нарезкой: гигабайты, и всё воспроизводимое
+data/kaggle_out/
 data/embeddings/
 dist/
 

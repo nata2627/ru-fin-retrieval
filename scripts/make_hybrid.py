@@ -30,7 +30,12 @@ def main() -> None:
     ap.add_argument("--config", default="base")
     ap.add_argument("--dense", default="bge-m3")
     ap.add_argument("--top", type=int, default=50)
+    ap.add_argument("--tag", default=None,
+                    help="имя выдачи; по умолчанию hybrid для bge-m3 и hybrid-<модель> "
+                         "для остальных — чтобы гибрид на новой модели не затёр тот, "
+                         "поверх которого уже посчитан реранкер")
     args = ap.parse_args()
+    tag = args.tag or ("hybrid" if args.dense == "bge-m3" else f"hybrid-{args.dense}")
 
     sparse_path = os.path.join(RUNDIR, f"{args.config}__bm25.jsonl")
     dense_path = os.path.join(RUNDIR, f"{args.config}__dense-{args.dense}.jsonl")
@@ -40,7 +45,7 @@ def main() -> None:
 
     sparse, dense = load(sparse_path), load(dense_path)
     common = [q for q in sparse if q in dense]
-    out_path = os.path.join(RUNDIR, f"{args.config}__hybrid.jsonl")
+    out_path = os.path.join(RUNDIR, f"{args.config}__{tag}.jsonl")
     with open(out_path, "w", encoding="utf-8") as f:
         for qid in common:
             merged = rrf([[(c, 0.0) for c in sparse[qid]],
