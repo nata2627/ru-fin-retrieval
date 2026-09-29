@@ -64,10 +64,17 @@ def tokenize(text: str) -> list[str]:
 
 
 def normalize_query(q: str) -> str:
-    """Снять канцелярит и раскрыть сокращения. Проверяется абляцией."""
-    q = _BOILERPLATE.sub("", q.strip())
+    """Снять канцелярит и раскрыть сокращения. Проверяется абляцией.
+
+    Исходный запрос сохраняется отдельно: если чистка съела его целиком
+    («Каков» — это весь запрос и он же весь зачин), возвращается исходный.
+    Пустой запрос не находит ничего, и такой провал по метрикам выглядел бы
+    как провал поиска.
+    """
+    исходный = q.strip()
+    очищенный = _BOILERPLATE.sub("", исходный)
     out = []
-    for w in re.split(r"(\W+)", q):
+    for w in re.split(r"(\W+)", очищенный):
         low = w.lower()
         out.append(ABBREVIATIONS[low] if low in ABBREVIATIONS else w)
-    return "".join(out).strip() or q.strip()
+    return "".join(out).strip() or исходный
