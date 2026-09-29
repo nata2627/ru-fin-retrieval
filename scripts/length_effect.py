@@ -28,6 +28,8 @@ import os
 import statistics
 import sys
 
+import numpy as np
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from rufin import metrics as M  # noqa: E402
@@ -60,6 +62,7 @@ def main() -> None:
     ap.add_argument("--dense", default="dense-bge-m3")
     ap.add_argument("--metric", default="NDCG@10")
     ap.add_argument("--groups", type=int, default=3, help="на сколько групп по длине делить")
+    ap.add_argument("--seed", type=int, default=0, help="зерно бутстрэпа")
     args = ap.parse_args()
 
     qrels = read_qrels(os.path.join(QDIR, "qrels.tsv"))
@@ -113,9 +116,10 @@ def main() -> None:
         f"это примерно {statistics.median(r[0] for r in rows) / CHARS_PER_TOKEN:.0f} токенов")
     say()
     say(f"{'группа по длине эталона':<26} {'запросов':>9} {'медиана, ток.':>14} "
-        f"{args.baseline:>14} {args.dense:>18} {'разница':>10}")
+        f"{args.baseline:>14} {args.dense:>18} {'разрыв':>10}   {'интервал 95%':>20}")
 
     size = len(rows) // args.groups
+    разрывы: list[tuple[str, np.ndarray]] = []
     for g in range(args.groups):
         lo = g * size
         hi = len(rows) if g == args.groups - 1 else (g + 1) * size
@@ -123,19 +127,40 @@ def main() -> None:
         if not часть:
             continue
         idx = [i for _, _, i in часть]
-        b = statistics.fmean(per_q[args.baseline][args.metric][i] for i in idx)
-        d = statistics.fmean(per_q[args.dense][args.metric][i] for i in idx)
+        bv = per_q[args.baseline][args.metric][idx]
+        dv = per_q[args.dense][args.metric][idx]
+        # разрыв берётся по каждому запросу: без поквериных значений
+        # к нему не посчитать интервал, а без интервала клетку читать нельзя
+        gap = dv - bv
+        ci = M.bootstrap_ci(gap, seed=args.seed)
         label = (f"{часть[0][0] / CHARS_PER_TOKEN:.0f}–{часть[-1][0] / CHARS_PER_TOKEN:.0f} "
                  f"токенов")
+        разрывы.append((label, gap))
         say(f"{label:<26} {len(часть):>9} "
             f"{statistics.median(x[0] for x in часть) / CHARS_PER_TOKEN:>14.0f} "
-            f"{b:>14.3f} {d:>18.3f} {d - b:>+10.3f}")
+            f"{float(bv.mean()):>14.3f} {float(dv.mean()):>18.3f} {ci.mean:>+10.3f}   "
+            f"[{ci.lo:+.3f}; {ci.hi:+.3f}]")
 
     say()
-    say("Читать надо последний столбец: он показывает, как меняется отставание")
+    if len(разрывы) >= 2:
+        кор, длин = разрывы[0][1], разрывы[-1][1]
+        # Группы состоят из разных запросов, поэтому сравнение непарное:
+        # пары нет, и каждая выборка пересобирается независимо.
+        ci = M.unpaired_diff_ci(длин, кор, seed=args.seed)
+        вывод = ("установлено" if ci.lo * ci.hi > 0
+                 else "НЕ установлено: интервал накрывает ноль")
+        say(f"изменение разрыва, длинные минус короткие: {ci.mean:+.3f} "
+            f"[{ci.lo:+.3f}; {ci.hi:+.3f}] — {вывод}")
+        say()
+
+    say("Читать надо предпоследний столбец: он показывает, как меняется отставание")
     say("плотного поиска от лексического при переходе к более длинным эталонам.")
     say("Уровень метрики внутри группы сравнивать между группами нельзя —")
     say("вопросы к длинным и коротким фрагментам писались по разному материалу.")
+    say()
+    say("Отдельная клетка опирается на полсотни запросов и потому шумная. Судить")
+    say("следует по строке с изменением разрыва: она и говорит, установлен ли")
+    say("эффект длины у этой модели, — а не по тому, как выглядит столбик глазами.")
 
     os.makedirs(RAW, exist_ok=True)
     out = os.path.join(RAW, f"length_effect_{args.config}_{args.dense}.txt")

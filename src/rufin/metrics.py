@@ -92,6 +92,29 @@ def bootstrap_ci(values: np.ndarray, n: int = 10000, level: float = 0.95,
     return Interval(float(v.mean()), float(np.quantile(means, a)), float(np.quantile(means, 1 - a)))
 
 
+def unpaired_diff_ci(a: np.ndarray, b: np.ndarray, n: int = 10000, level: float = 0.95,
+                     seed: int = 0) -> Interval:
+    """Интервал разницы средних для двух **разных** наборов запросов.
+
+    Нужен там, где сравниваются группы, а не конфигурации: например, разрыв
+    с базовой линией на длинных эталонах против разрыва на коротких. Запросы
+    в группах разные, пары нет, и парный бутстрэп здесь неприменим — каждая
+    выборка пересобирается независимо.
+
+    Интервал получается заметно шире парного, и это не недостаток метода,
+    а честная цена: сравнение по разным запросам действительно знает меньше.
+    """
+    x = a[~np.isnan(a)]
+    y = b[~np.isnan(b)]
+    if x.size == 0 or y.size == 0:
+        return Interval(math.nan, math.nan, math.nan)
+    rng = np.random.default_rng(seed)
+    means = (rng.choice(x, size=(n, x.size), replace=True).mean(axis=1)
+             - rng.choice(y, size=(n, y.size), replace=True).mean(axis=1))
+    lo, hi = np.quantile(means, ((1 - level) / 2, 1 - (1 - level) / 2))
+    return Interval(float(x.mean() - y.mean()), float(lo), float(hi))
+
+
 def paired_diff_ci(a: np.ndarray, b: np.ndarray, n: int = 10000, level: float = 0.95,
                    seed: int = 0) -> tuple[Interval, float]:
     """Интервал разницы (a - b) парным бутстрэпом и доля перестановок против.

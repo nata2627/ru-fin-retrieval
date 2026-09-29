@@ -15,7 +15,7 @@ CHUNKS ?= base
 FROM ?= base
 DENSE ?= bge-m3
 
-.PHONY: help test lint probe check-split check-bm25 check-alignment remap corpus chunks use-chunks explan explan-apply gold gold-apply queries pool kaggle bench metrics latency errors clean-raw
+.PHONY: help test lint probe check-split check-bm25 check-alignment remap length-effect chunking-effect corpus chunks use-chunks explan explan-apply gold gold-apply queries pool kaggle bench metrics latency errors clean-raw
 
 help:
 	@echo "Проверки (ни данных, ни видеокарты не требуют):"
@@ -28,6 +28,8 @@ help:
 	@echo "  check-bm25   сверка своей реализации BM25 с rank_bm25"
 	@echo "  check-alignment  сверка: тот ли текст под эталонным фрагментом"
 	@echo "  remap        перенести эталоны на другую нарезку (CHUNKS=size-256)"
+	@echo "  length-effect    растёт ли отставание с длиной эталона (DENSE=...)"
+	@echo "  chunking-effect  меняется ли разрыв при смене нарезки (CHUNKS=...)"
 	@echo "  corpus       сбор корпуса: выпуски «Вестника» -> акты"
 	@echo "  chunks       нарезка актов на фрагменты (CONFIGS=base ...)"
 	@echo "  use-chunks   поставить нарезку, выгруженную с видеокарты (FILE=...)"
@@ -71,6 +73,14 @@ check-alignment:
 # означать «эталона тут нет», а не «нарезка плохая».
 remap:
 	$(PY) scripts/remap_qrels.py --from $(FROM) --to $(CHUNKS)
+
+# Обе проверки читают уже посчитанные выдачи и выносят вердикт с интервалом:
+# без него столбик цифр легко прочитать глазами как закономерность.
+length-effect:
+	$(PY) scripts/length_effect.py --dense dense-$(DENSE)
+
+chunking-effect:
+	$(PY) scripts/chunking_effect.py --from $(FROM) --to $(CHUNKS) --dense dense-$(DENSE)
 
 corpus:
 	$(PY) scripts/build_corpus.py --pause $(PAUSE)

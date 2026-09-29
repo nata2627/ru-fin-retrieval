@@ -129,5 +129,38 @@ def test_парное_сравнение_считает_только_общие_
     assert ci.mean == pytest.approx(0.5)      # (1-0) и (0-0), второй выброшен
 
 
+def test_непарное_сравнение_находит_разницу_между_группами():
+    a = np.full(50, 0.6)
+    b = np.full(50, 0.2)
+    ci = M.unpaired_diff_ci(a, b, n=2000, seed=0)
+    assert ci.mean == pytest.approx(0.4)
+    assert ci.lo > 0
+
+
+def test_непарное_сравнение_шире_парного():
+    # сравнение по разным запросам знает меньше, и интервал обязан быть шире
+    rng = np.random.default_rng(0)
+    a, b = rng.random(60), rng.random(60)
+    парный, _ = M.paired_diff_ci(a, b, n=4000, seed=1)
+    непарный = M.unpaired_diff_ci(a, b, n=4000, seed=1)
+    assert (непарный.hi - непарный.lo) > (парный.hi - парный.lo)
+
+
+def test_непарное_сравнение_работает_на_группах_разного_размера():
+    ci = M.unpaired_diff_ci(np.full(30, 1.0), np.full(70, 0.5), n=1000, seed=0)
+    assert ci.mean == pytest.approx(0.5)
+
+
+def test_непарное_сравнение_пропускает_запросы_без_эталона():
+    a = np.array([1.0, np.nan, 1.0])
+    b = np.array([0.0, 0.0])
+    assert M.unpaired_diff_ci(a, b, n=500, seed=0).mean == pytest.approx(1.0)
+
+
+def test_непарное_сравнение_пустой_группы_не_падает():
+    ci = M.unpaired_diff_ci(np.array([np.nan]), np.array([1.0]), n=100)
+    assert math.isnan(ci.mean)
+
+
 def test_интервал_печатается_с_тремя_знаками():
     assert str(M.Interval(0.5, 0.4, 0.6)) == "0.500 [0.400; 0.600]"
