@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import argparse
+import glob
 import json
 import os
 import sys
@@ -36,7 +37,9 @@ def body(chunk: dict) -> str:
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--chunks", default="base")
-    ap.add_argument("--queries", default=os.path.join(QDIR, "synthetic.jsonl"))
+    ap.add_argument("--queries", nargs="*", default=None,
+                    help="файлы синтетических запросов; по умолчанию все "
+                         "synthetic*.jsonl в data/queries")
     args = ap.parse_args()
 
     path = os.path.join(CHUNKDIR, f"{args.chunks}.jsonl")
@@ -50,8 +53,17 @@ def main() -> None:
             c = json.loads(line)
             chunks[c["chunk_id"]] = c
 
-    queries = [json.loads(l) for l in open(args.queries, encoding="utf-8") if l.strip()]
-    checkable = [q for q in queries if "copy_run" in q]
+    # Сверяются все файлы синтетики сразу: обучающая выборка, dev и тест
+    # приезжают с видеокарты порознь, и разойтись нарезка может на любом из них.
+    paths = args.queries or sorted(glob.glob(os.path.join(QDIR, "synthetic*.jsonl")))
+    checkable = []
+    for qpath in paths:
+        if not os.path.exists(qpath):
+            continue
+        with open(qpath, encoding="utf-8") as f:
+            got = [q for q in (json.loads(l) for l in f if l.strip()) if "copy_run" in q]
+        print(f"   {os.path.basename(qpath):<28} {len(got):>6} запросов с copy_run")
+        checkable += got
     if not checkable:
         print("в запросах нет поля copy_run — сверять нечем")
         raise SystemExit(2)

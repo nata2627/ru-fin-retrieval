@@ -14,8 +14,9 @@ PAUSE ?= 1.5
 CHUNKS ?= base
 FROM ?= base
 DENSE ?= bge-m3
+REPO ?= nata2627/ru-fin-retrieval
 
-.PHONY: help test lint probe check-split check-bm25 check-alignment remap length-effect chunking-effect corpus chunks use-chunks explan explan-apply gold gold-apply queries pool kaggle bench metrics latency errors clean-raw
+.PHONY: help test lint probe check-split check-bm25 check-alignment remap length-effect chunking-effect corpus chunks use-chunks explan queries pool kaggle bench metrics latency errors clean-raw split live manual-task manual-apply judge sample-for-human kappa check-bench publish
 
 help:
 	@echo "Проверки (ни данных, ни видеокарты не требуют):"
@@ -33,13 +34,19 @@ help:
 	@echo "  corpus       сбор корпуса: выпуски «Вестника» -> акты"
 	@echo "  chunks       нарезка актов на фрагменты (CONFIGS=base ...)"
 	@echo "  use-chunks   поставить нарезку, выгруженную с видеокарты (FILE=...)"
-	@echo "  explan       собрать живые вопросы из «Разъяснений» Банка России"
-	@echo "  explan-apply перенести проверенный выбор в разметку"
-	@echo "  gold         подобрать эталоны к вопросам, написанным руками"
-	@echo "  gold-apply   перенести выбор по ним в разметку"
+	@echo "  explan       скачать живые вопросы из «Разъяснений» Банка России"
+	@echo "  split        сплит корпуса по актам (обязателен до генерации)"
+	@echo "  live         живые вопросы: привязка к акту и разметка по пунктам"
+	@echo "  manual-task  лист актов, по которым писать ручные запросы"
+	@echo "  manual-apply перенести заполненный лист в набор"
+	@echo "  judge        перенести разметку судьи (judge.tsv с Kaggle) в эталоны"
+	@echo "  sample-for-human  выборка 150 пар для ручной проверки судьи"
+	@echo "  kappa        согласие судьи с человеком числом"
 	@echo "  queries      собрать тексты запросов для прогона (эталоны не нужны)"
 	@echo "  pool         лист разметки по объединённым выдачам всех конфигураций"
 	@echo "  bench        сборка набора запросов и выгрузка в формате MTEB"
+	@echo "  check-bench  сверка выгрузки самой с собой перед публикацией"
+	@echo "  publish      публикация набора на HuggingFace (REPO=$(REPO))"
 	@echo "  metrics      метрики по выдачам, посчитанным на Kaggle (CHUNKS=$(CHUNKS))"
 	@echo "  errors       разбор провальных запросов"
 	@echo "  latency      замеры задержки на этой машине (DENSE=$(DENSE))"
@@ -48,6 +55,7 @@ help:
 	@echo "  kaggle       собрать пакет для загрузки (dist/kaggle, ~20 МБ)"
 	@echo "               этап A: синтетические запросы и эмбеддинги"
 	@echo "               этап B: выдачи всех поисковых конфигураций"
+	@echo "               этап C: обучающая выборка, dev, тест, судья"
 
 # Тесты на собранных данных помечены `data` и пропускаются, если данных нет.
 test:
@@ -101,27 +109,45 @@ use-chunks:
 kaggle:
 	$(PY) scripts/make_kaggle_package.py
 
-# Сборке разметки предшествует сверка нарезок: если под эталонным фрагментом
-# лежит не тот текст, по которому писался вопрос, метрики будут бессмысленны,
-# а заметить это по ним самим нельзя.
-# Живые вопросы: собираются с сайта Банка России, к ним подбираются кандидаты
-# в эталонный фрагмент, человек выбирает подходящий.
+# Живые вопросы качаются с сайта Банка России один раз; дальше с собранным
+# файлом работает `make live`.
 explan:
 	$(PY) scripts/collect_explanations.py
-	$(PY) scripts/prepare_explan_queries.py --target 50
 
-explan-apply:
-	$(PY) scripts/apply_explan_choices.py
+# Сплит режется по актам: фрагменты одного акта нарезаны с перекрытием,
+# и сплит по фрагментам — это утечка. Пересобирать после каждой новой
+# разметки и обязательно ДО генерации обучающей выборки.
+split:
+	$(PY) scripts/make_split.py $(if $(SEED),--seed $(SEED),)
 
-# Тот же лист и та же процедура, но для вопросов, написанных руками.
-gold-apply:
-	$(PY) scripts/apply_explan_choices.py \
-		--tsv data/queries/manual_candidates.tsv \
-		--out data/queries/manual.jsonl --origin ручной
+# Живые вопросы из «Разъяснений»: к какому акту относится вопрос, какие
+# из них размечаются по названным пунктам, какие идут в пул, какие
+# отбрасываются, потому что названного пункта в нашей редакции акта нет.
+live:
+	$(PY) scripts/label_by_clause.py --chunks $(CHUNKS)
 
-gold:
-	$(PY) scripts/find_gold.py --file data/queries/manual_questions.txt
+# Ручные запросы — единственное место, где разнообразие актов задаётся
+# нарочно. Лист назначает акт каждому запросу; заполняется руками.
+manual-task:
+	$(PY) scripts/manual_task.py --chunks $(CHUNKS)
 
+manual-apply:
+	$(PY) scripts/apply_manual_task.py
+
+# Разметка пула считается судьёй на Kaggle; сюда приезжает judge.tsv.
+judge:
+	$(PY) scripts/apply_judge.py
+
+# У судьи есть погрешность, и она измеряется согласием с человеком.
+sample-for-human:
+	$(PY) scripts/sample_for_human.py --chunks $(CHUNKS)
+
+kappa:
+	$(PY) scripts/kappa.py
+
+# Сборке разметки предшествует сверка нарезок: если под эталонным фрагментом
+# лежит не тот текст, по которому писался вопрос, метрики будут бессмысленны,
+# а заметить это по ним самим нельзя. Она встроена в `make bench`.
 queries:
 	$(PY) scripts/build_query_texts.py
 
@@ -132,6 +158,14 @@ pool:
 
 bench: check-alignment
 	$(PY) scripts/build_benchmark.py
+
+# Публикация: сначала проверки, потом заливка. Опубликованный набор
+# с эталоном на несуществующий фрагмент хуже, чем ненапубликованный.
+check-bench:
+	$(PY) scripts/publish_hf.py --dry-run
+
+publish: check-bench
+	$(PY) scripts/publish_hf.py --repo $(REPO)
 
 metrics:
 	$(PY) scripts/metrics_report.py --config $(CHUNKS)

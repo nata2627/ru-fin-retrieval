@@ -79,6 +79,8 @@ def main() -> None:
     ap.add_argument("--depth", type=int, default=10,
                     help="сколько верхних позиций брать с каждой выдачи")
     ap.add_argument("--out", default=os.path.join(QDIR, "pool_candidates.tsv"))
+    ap.add_argument("--allow-partial", action="store_true",
+                    help="собрать пул по неполным выдачам (занижает новые конфигурации)")
     args = ap.parse_args()
 
     runs = load_runs(args.config)
@@ -93,9 +95,29 @@ def main() -> None:
             chunks[c["chunk_id"]] = c
 
     queries = [json.loads(l) for l in open(args.queries, encoding="utf-8") if l.strip()]
-    need = [q for q in queries if not q.get("gold_chunk_id")]
+    need = [q for q in queries
+            if not (q.get("gold_chunk_ids") or q.get("gold_chunk_id"))]
     print(f"конфигураций в выдачах: {len(runs)} ({', '.join(runs)})")
     print(f"запросов всего {len(queries)}, эталон нужен для {len(need)}")
+
+    # Пул, собранный по устаревшим выдачам, занижает всё, что появилось после
+    # них: находок новых конфигураций в нём просто нет, и полнота этих
+    # конфигураций упадёт не по заслугам. Заметить это по метрикам нельзя,
+    # поэтому здесь отказ, а не предупреждение.
+    covered = set.intersection(*(set(run) for run in runs.values()))
+    отстали = [q["query_id"] for q in need if q["query_id"] not in covered]
+    if отстали and not args.allow_partial:
+        print(f"\nОТКАЗ: у {len(отстали)} запросов из {len(need)} нет выдачи "
+              f"хотя бы у одной конфигурации.")
+        print("Пул по неполным выдачам занижает конфигурации, которых в нём нет, "
+              "и по метрикам этого не видно.")
+        print("Нужен прогон этапа B по нынешнему queries.jsonl — см. kaggle/README.md.")
+        print(f"Первые без выдачи: {', '.join(отстали[:8])}")
+        print("Если пул нужен именно по тому, что посчитано, — `--allow-partial`.")
+        raise SystemExit(2)
+    if отстали:
+        print(f"   --allow-partial: {len(отстали)} запросов без выдачи пропущены")
+        need = [q for q in need if q["query_id"] in covered]
 
     rows = []
     for q in need:
@@ -130,11 +152,12 @@ def main() -> None:
     print(f"\nлист разметки: {os.path.relpath(args.out, ROOT)}")
     print(f"  запросов: {len(per_q)}, строк: {len(rows)}, "
           f"кандидатов на запрос в среднем {len(rows) / max(1, len(per_q)):.1f}")
-    print("\nв колонке otsenka_0_1_2:")
-    print("  2 — фрагмент прямо отвечает на вопрос")
-    print("  1 — относится к делу, но ответа не содержит")
-    print("  0 — не относится")
+    # Шкала не пересказывается здесь: она одна на человека и на судью
+    # и лежит в docs/ANNOTATION_GUIDE.md. Два пересказа разойдутся,
+    # и каппа померит разницу в инструкциях, а не согласие.
+    print("\nкак размечать — docs/ANNOTATION_GUIDE.md, колонка otsenka_0_1_2")
     print("если ни одному фрагменту не поставлена 2, запрос выбывает из набора")
+    print("дальше: разметка судьёй на Kaggle (run_phase_c.py --judge), затем make judge")
 
 
 if __name__ == "__main__":

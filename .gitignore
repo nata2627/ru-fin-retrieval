@@ -28,6 +28,12 @@ data/chunks/
 data/corpus/acts.jsonl
 data/runs/
 data/results/
+# Выгрузка в формате MTEB: корпус в ней тот же, что в data/corpus, — 240 МБ.
+# Собирается `make bench`, публикуется на HuggingFace, в репозитории
+# не нужна. Разметка, из которой она собрана, лежит в data/queries.
+data/benchmark/
+# лист ручной проверки градаций пересобирается `make bench` из разметки
+data/queries/grade_candidates.tsv
 # сюда kaggle_run.py складывает скачанный вывод ядра целиком,
 # вместе с корпусом и нарезкой: гигабайты, и всё воспроизводимое
 data/kaggle_out/

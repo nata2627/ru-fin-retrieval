@@ -71,3 +71,16 @@ def test_кириллица_не_экранируется(tmp_path):
     path = tmp_path / "queries.jsonl"
     write_queries(str(path), [{"query_id": "q1", "text": "резерв"}])
     assert "резерв" in path.read_text(encoding="utf-8")
+
+
+def test_разметка_с_четвёртым_столбцом_читается(tmp_path):
+    """У разметки по названным пунктам есть столбец с основанием.
+
+    Требование «ровно три столбца» прочитало бы такой файл как пустой,
+    и разметка исчезла бы молча.
+    """
+    path = tmp_path / "qrels_by_clause.tsv"
+    path.write_text("query-id\tcorpus-id\tscore\tosnovanie\n"
+                    "exp0000\tакт#0001\t2\tпункты 3.1, 3.2 акта 590-П\n",
+                    encoding="utf-8")
+    assert read_qrels(path) == {"exp0000": {"акт#0001": 2}}

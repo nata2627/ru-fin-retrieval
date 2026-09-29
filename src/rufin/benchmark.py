@@ -56,7 +56,10 @@ def read_qrels(path: str) -> dict[str, dict[str, int]]:
             f.seek(0)
         for line in f:
             parts = line.rstrip("\n").split("\t")
-            if len(parts) != 3:
+            # Столбцов может быть больше трёх: у разметки по названным пунктам
+            # есть четвёртый — основание. Требовать ровно три значило бы молча
+            # прочитать такой файл как пустой.
+            if len(parts) < 3 or not parts[2].strip().lstrip("-").isdigit():
                 continue
             out[parts[0]][parts[1]] = int(parts[2])
     return dict(out)

@@ -72,12 +72,21 @@ def copy_score(query: str, passage: str) -> tuple[int, float]:
     return run, run / len(q) if q else 0.0
 
 
-def judge_query(query: str, passage: str, idf: IdfTable) -> tuple[bool, str]:
-    """Годится ли вопрос. Возвращает решение и причину отказа."""
+def judge_query(query: str, passage: str, idf: IdfTable,
+                require_question_mark: bool = True) -> tuple[bool, str]:
+    """Годится ли вопрос. Возвращает решение и причину отказа.
+
+    `require_question_mark` выключается для одного стиля — короткого
+    поискового запроса. В строку поиска набирают «резерв по ссуде третьей
+    категории», без вопросительного знака и без глагола, и это не брак
+    генерации, а третий речевой режим, ради которого стиль и заведён.
+    Для остальных стилей проверка остаётся: модель, сбившаяся с задачи,
+    первым делом начинает писать утверждения и пересказ фрагмента.
+    """
     toks = tokenize(query)
     if len(toks) < MIN_QUERY_TOKENS:
         return False, "слишком короткий"
-    if not query.strip().endswith("?"):
+    if require_question_mark and not query.strip().endswith("?"):
         return False, "не вопрос"
     run, share = copy_score(query, passage)
     if run > MAX_COMMON_RUN or share > MAX_COPY_SHARE:

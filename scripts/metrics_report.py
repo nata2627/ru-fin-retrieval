@@ -34,6 +34,14 @@ TOP_REPORT = 10
 # порядок конфигураций в таблице: от базовой линии к самой тяжёлой
 ORDER = ["bm25", "dense", "hybrid", "hybrid-rerank"]
 
+# Порядок подвыборок в разбивке. Заголовочная идёт первой, синтетика —
+# последней и отдельной строкой: она в заголовочную цифру не входит.
+SUBSET_ORDER = ["заголовочная", "живые", "живые без 590-П", "ручные",
+                "невиданные акты", "dev", "синтетика"]
+# Минимум запросов, при котором подвыборку имеет смысл печатать: на десяти
+# запросах доверительный интервал шире самой метрики.
+MIN_SUBSET = 20
+
 
 def sort_key(name: str) -> tuple:
     for i, prefix in enumerate(ORDER):
@@ -91,6 +99,8 @@ def main() -> None:
                          "и qrels_<нарезка>.tsv для остальных")
     ap.add_argument("--baseline", default="bm25")
     ap.add_argument("--phase-b-report", default=os.path.join(RUNDIR, "report_phase_b.json"))
+    ap.add_argument("--subsets", default=os.path.join(QDIR, "podvyborki.json"),
+                    help="состав подвыборок; считает `make bench`")
     args = ap.parse_args()
 
     os.makedirs(RESDIR, exist_ok=True)
@@ -106,7 +116,14 @@ def main() -> None:
 
     queries = [json.loads(l) for l in open(args.queries, encoding="utf-8") if l.strip()]
     qrels = read_qrels(qrels_path)
-    known = {q["query_id"] for q in queries} & set(qrels)
+    # Метрика считается только по запросам, для которых выдача есть у всех
+    # конфигураций: сравнение парное, и разные знаменатели сделали бы его
+    # бессмысленным. Размеченные запросы без выдачи — это не ноль качества,
+    # а непосчитанный прогон, и о них надо сказать вслух.
+    covered = set.intersection(*(set(run) for run in runs.values()))
+    labelled = {q["query_id"] for q in queries} & set(qrels)
+    known = labelled & covered
+    без_выдачи = sorted(labelled - covered)
     origins: dict[str, int] = {}
     for q in queries:
         if q["query_id"] in known:
@@ -120,8 +137,13 @@ def main() -> None:
 
     say(f"нарезка: {args.config}")
     say(f"разметка: {os.path.relpath(qrels_path, ROOT)}")
-    say(f"запросов с разметкой: {len(known)}  "
+    say(f"запросов с разметкой и выдачей: {len(known)}  "
         f"({', '.join(f'{k}: {v}' for k, v in sorted(origins.items()))})")
+    if без_выдачи:
+        say(f"размечено, но выдачи нет: {len(без_выдачи)} — эти запросы в метрику "
+            f"не входят вовсе")
+        say(f"   нужен новый прогон этапа B по нынешнему queries.jsonl "
+            f"({len(queries)} запросов)")
     syn = origins.get("синтетический", 0)
     if len(known):
         say(f"доля синтетических: {100 * syn / len(known):.0f}%")
@@ -152,6 +174,47 @@ def main() -> None:
             say(f"   {cfg:<18} " + "   ".join(parts))
         say("   * интервал не накрывает ноль — разницу можно считать установленной")
 
+    # ---- разбивка по подвыборкам ----
+    # Усреднять живые вопросы с синтетическими нельзя: это три разных речевых
+    # режима, и одна цифра по ним говорит о смеси, которой не существует.
+    # Заголовочная цифра считается по живым, ручным и невиданным актам;
+    # синтетика печатается отдельной строкой для сопоставимости с прежними
+    # прогонами.
+    subsets: dict[str, list[str]] = {}
+    if os.path.exists(args.subsets):
+        subsets = json.load(open(args.subsets, encoding="utf-8"))
+    подвыборки: dict[str, dict] = {}
+    if subsets:
+        say()
+        say("по подвыборкам (NDCG@10 с интервалом):")
+        имена = [n for n in SUBSET_ORDER if n in subsets] + \
+                [n for n in subsets if n not in SUBSET_ORDER]
+        шапка = [n for n in имена if len(set(subsets[n]) & known) >= MIN_SUBSET]
+        малые = [(n, len(set(subsets[n]) & known)) for n in имена if n not in шапка]
+        if not шапка:
+            say("   ни одна подвыборка не набрала "
+                f"{MIN_SUBSET} размеченных запросов")
+        else:
+            say(f"{'конфигурация':<18} " + " ".join(f"{n[:20]:>22}" for n in шапка))
+            for cfg, run in trimmed.items():
+                клетки = []
+                for name in шапка:
+                    ids = set(subsets[name]) & known
+                    pq = M.per_query({k: v for k, v in run.items() if k in ids},
+                                     {k: v for k, v in qrels.items() if k in ids})
+                    ci = M.bootstrap_ci(pq["NDCG@10"])
+                    подвыборки.setdefault(name, {})[cfg] = ci.__dict__
+                    клетки.append(f"{str(ci):>22}")
+                say(f"{cfg:<18} " + " ".join(клетки))
+            say(f"{'запросов':<18} " + " ".join(
+                f"{len(set(subsets[n]) & known):>22}" for n in шапка))
+        if малые:
+            say("   не напечатаны (меньше "
+                f"{MIN_SUBSET} размеченных запросов): "
+                + ", ".join(f"{n} — {k}" for n, k in малые))
+        say("   заголовочная = живые + ручные + невиданные акты; "
+            "синтетика в неё не входит")
+
     index_info = {}
     if os.path.exists(args.phase_b_report):
         index_info = json.load(open(args.phase_b_report, encoding="utf-8")).get("index", {})
@@ -165,6 +228,7 @@ def main() -> None:
 
     result = {"config": args.config, "qrels": os.path.relpath(qrels_path, ROOT),
               "queries": len(known), "origins": origins,
+              "podvyborki": подвыборки,
               "metrics": {cfg: {n: M.bootstrap_ci(pq[n]).__dict__ for n in names}
                           for cfg, pq in per_q.items()},
               "index": index_info}

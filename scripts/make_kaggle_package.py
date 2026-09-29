@@ -19,6 +19,17 @@ import shutil
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 DIST = os.path.join(ROOT, "dist", "kaggle")
+QDIST = os.path.join(ROOT, "dist", "kaggle_queries")
+
+# Второй, маленький пакет: то, что меняется от прогона к прогону. Код и корпус
+# лежат отдельным датасетом и не перезагружаются, а набор запросов, сплит
+# и лист пула — перезагружаются каждый раз, и тащить ради них двадцать
+# мегабайт корпуса незачем.
+QUERIES = [
+    "data/queries/queries.jsonl",
+    "data/queries/split.json",
+    "data/queries/pool_candidates.tsv",
+]
 
 # модули проекта, которые нужны на видеокарте
 PACKAGE = [
@@ -26,6 +37,8 @@ PACKAGE = [
     "src/rufin/chunking.py",
     "src/rufin/chunk_configs.py",
     "src/rufin/queryfilter.py",
+    "src/rufin/split.py",
+    "src/rufin/annotation.py",
     "src/rufin/benchmark.py",
     "src/rufin/retrieval/__init__.py",
     "src/rufin/retrieval/text.py",
@@ -43,6 +56,9 @@ SCRIPTS = [
     "kaggle/run_phase_b.py",
     "kaggle/gpu_embed.py",
     "kaggle/gpu_queries.py",
+    "kaggle/gpu_gen.py",
+    "kaggle/gpu_judge.py",
+    "kaggle/run_phase_c.py",
     "kaggle/gpu_search.py",
     "kaggle/README.md",
 ]
@@ -72,6 +88,17 @@ def main() -> None:
     archive = shutil.make_archive(os.path.join(ROOT, "dist", "ru-fin-retrieval"),
                                   "zip", DIST)
 
+    shutil.rmtree(QDIST, ignore_errors=True)
+    os.makedirs(QDIST, exist_ok=True)
+    взято = []
+    for rel in QUERIES:
+        src = os.path.join(ROOT, rel)
+        if os.path.exists(src):
+            shutil.copyfile(src, os.path.join(QDIST, os.path.basename(rel)))
+            взято.append(os.path.basename(rel))
+    queries_archive = shutil.make_archive(os.path.join(ROOT, "dist", "ru-fin-queries"),
+                                          "zip", QDIST)
+
     total = 0
     print("пакет собран: dist/kaggle")
     for base, _, files in os.walk(DIST):
@@ -83,6 +110,14 @@ def main() -> None:
     print(f"   {'итого':<34} {total / 1048576:>7.2f} МБ")
     print(f"\nдля загрузки на Kaggle: {os.path.relpath(archive, ROOT)} "
           f"({os.path.getsize(archive) / 1048576:.1f} МБ)")
+    print(f"вторым датасетом — {os.path.relpath(queries_archive, ROOT)} "
+          f"({os.path.getsize(queries_archive) / 1024:.0f} КБ): {', '.join(взято)}")
+    if "pool_candidates.tsv" not in взято:
+        print("   пула нет: он собирается `make pool` после прогона этапа B "
+              "по нынешнему queries.jsonl. Судье без него нечего размечать")
+    if "split.json" not in взято:
+        print("   сплита нет: `python3 scripts/make_split.py`. Генерировать "
+              "без сплита нельзя — вопросы попадут на акты теста")
     print("порядок действий — kaggle/README.md")
 
 
