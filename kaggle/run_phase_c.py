@@ -88,8 +88,19 @@ def main() -> None:
     ap.add_argument("--teacher-filter", action="store_true",
                     help="третий фильтр: учитель видит эталон в первых пятидесяти")
     ap.add_argument("--filter-depth", type=int, default=100)
+    ap.add_argument("--filter-keep", type=int, default=None,
+                    help="порог: в первые сколько кандидатов обязан попасть "
+                         "эталон. По умолчанию половина глубины — отношение "
+                         "и есть смысл фильтра. Порог не меньше глубины "
+                         "означает фильтр, который не отбрасывает ничего")
     ap.add_argument("--judge", action="store_true", help="разметить пул судьёй")
     ap.add_argument("--limit-acts", type=int, default=0)
+    ap.add_argument("--batch", type=int, default=256,
+                    help="сколько фрагментов в одной пачке генерации. Стиль "
+                         "выбирается на пачку целиком, поэтому на маленькой "
+                         "пробе пачку надо уменьшать: иначе все двадцать "
+                         "вопросов выйдут одного речевого режима, и проверить "
+                         "различимость режимов будет нечем")
     args = ap.parse_args()
 
     device = common.pick_device()
@@ -113,6 +124,32 @@ def main() -> None:
     chunks = common.build_chunks_cached(acts, "base", ruler, args.chunks_cache)
     report["всего фрагментов"] = len(chunks)
 
+    # Нарезка обязана совпасть с той, по которой считались выдачи и разметка.
+    # Она детерминирована, но зависит от версии токенизатора, а установка
+    # vLLM тянет свой transformers и границы сдвигает: 61 922 фрагмента
+    # вместо 62 594 на том же корпусе. Заметить это по самим вопросам нельзя.
+    # Идентификатор фрагмента — «акт#номер по порядку», то есть при сдвиге
+    # границ он не исчезает, а начинает указывать на другой текст: эталон
+    # молча съезжает, и обучающая выборка учит модель находить не то.
+    # Поэтому нарезка сверяется с канонической, а не пересчитывается на веру.
+    эталон = common.find_file("chunks_base.jsonl")
+    if эталон and not args.limit_acts:
+        import gzip
+        opener = gzip.open if эталон.endswith(".gz") else open
+        with opener(эталон, "rt", encoding="utf-8") as f:
+            сколько = sum(1 for line in f if line.strip())
+        if сколько != len(chunks):
+            raise SystemExit(
+                f"нарезка разошлась с канонической: посчитано {len(chunks)} "
+                f"фрагментов, в {эталон} их {сколько}. Идентификаторы "
+                f"позиционные, поэтому эталоны съедут молча. Положите "
+                f"канонический файл в {args.chunks_cache}/base.jsonl — "
+                f"он будет взят готовым, и сверка сойдётся.")
+        print(f"нарезка сошлась с канонической: {сколько} фрагментов", flush=True)
+    elif not args.limit_acts:
+        print("ВНИМАНИЕ: канонической нарезки среди входов нет, сверить "
+              "не с чем. Подключите датасет с chunks_base.jsonl", flush=True)
+
     split_path = args.split or common.find_file("split.json")
     if split_path is None:
         raise SystemExit("не найден split.json: подключите датасет с набором запросов. "
@@ -123,6 +160,22 @@ def main() -> None:
     for name, stat in split["статистика"].items():
         print(f"   {name:<18} актов {stat['актов']:>5}, фрагментов {stat['фрагментов']:>7}",
               flush=True)
+
+    # Вторая сверка нарезки, и она сильнее первой: сплит подключён всегда,
+    # а каноническая нарезка — не всегда. Числа в его статистике посчитаны
+    # на маке по канонической нарезке, поэтому их сумма — независимое
+    # свидетельство. Расхождение означает, что токенизатор здесь режет иначе
+    # (установка vLLM тянет свой transformers), а идентификатор фрагмента
+    # позиционный: он не исчезнет, а станет указывать на другой текст.
+    по_сплиту = sum(stat["фрагментов"] for stat in split["статистика"].values())
+    if not args.limit_acts and по_сплиту != len(chunks):
+        raise SystemExit(
+            f"нарезка разошлась со сплитом: здесь {len(chunks)} фрагментов, "
+            f"а сплит посчитан по {по_сплиту}. Эталоны сгенерированных "
+            f"вопросов съедут молча — идентификатор позиционный. "
+            f"Положите каноническую нарезку в {args.chunks_cache}/base.jsonl "
+            f"(и удалите то, что там лежит сейчас: готовая берётся из кэша "
+            f"раньше, чем считается новая).")
 
     all_texts = [c["text"] for c in chunks]
 
@@ -149,7 +202,7 @@ def main() -> None:
                              args.max_model_len)
         report["train"] = G.make_queries(
             llm, chunks_of_groups(chunks, split, [S.TRAIN]), train_path,
-            target=args.train, prefix="tr", idf_texts=all_texts)
+            target=args.train, prefix="tr", idf_texts=all_texts, batch=args.batch)
         report["train"]["модель"] = args.train_model
         save()
     if llm is not None:
@@ -167,13 +220,14 @@ def main() -> None:
         if args.dev and not os.path.exists(dev_path):
             report["dev"] = G.make_queries(
                 llm, chunks_of_groups(chunks, split, [S.DEV]), dev_path,
-                target=args.dev, prefix="dv", idf_texts=all_texts)
+                target=args.dev, prefix="dv", idf_texts=all_texts, batch=args.batch)
             report["dev"]["модель"] = args.test_model
             save()
         if args.test and not os.path.exists(test_path):
             report["test"] = G.make_queries(
                 llm, chunks_of_groups(chunks, split, [S.TEST_UNSEEN, S.TEST_KIND]),
-                test_path, target=args.test, prefix="ts", idf_texts=all_texts)
+                test_path, target=args.test, prefix="ts", idf_texts=all_texts,
+                batch=args.batch)
             report["test"]["модель"] = args.test_model
             save()
         free(llm)
@@ -187,7 +241,7 @@ def main() -> None:
             with open(path, encoding="utf-8") as f:
                 queries = [json.loads(l) for l in f if l.strip()]
             kept, stats = G.filter_by_teacher(queries, chunks, depth=args.filter_depth,
-                                              device=device)
+                                              keep_top=args.filter_keep, device=device)
             with open(path, "w", encoding="utf-8") as f:
                 for q in kept:
                     f.write(json.dumps(q, ensure_ascii=False) + "\n")

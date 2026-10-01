@@ -33,7 +33,12 @@ def main() -> None:
 
     q = os.path.join(ROOT, "data", "queries", "queries.jsonl")
     nq = sum(1 for _ in open(q, encoding="utf-8")) if os.path.exists(q) else 0
-    check("набор запросов", nq == 211, f"{nq} запросов")
+    # Число не закрепляется: набор растёт на каждом этапе (211 на этапе A,
+    # 486 после разметки живых вопросов, около тысячи после генерации dev
+    # и теста). Закреплённая цифра превращает проверку в ложную тревогу
+    # ровно тогда, когда работа идёт, поэтому проверяется только то, что
+    # набор не пустой и не усох.
+    check("набор запросов", nq >= 211, f"{nq} запросов")
 
     runs = os.path.join(ROOT, "data", "runs")
     have = sorted(os.listdir(runs)) if os.path.isdir(runs) else []
@@ -46,6 +51,11 @@ def main() -> None:
     rb = open(os.path.join(ROOT, "kaggle", "run_phase_b.py"), encoding="utf-8").read()
     check("сверка нарезки с этапом A", "check_same_chunking" in rb)
     check("выбор нарезок ключом --only", '"--only"' in rb)
+    rc = open(os.path.join(ROOT, "kaggle", "run_phase_c.py"), encoding="utf-8").read()
+    check("сверка нарезки в этапе C", "нарезка разошлась с канонической" in rc)
+    check("сверка нарезки со сплитом", "нарезка разошлась со сплитом" in rc)
+    gg = open(os.path.join(ROOT, "kaggle", "gpu_gen.py"), encoding="utf-8").read()
+    check("vLLM поднимается через spawn", "VLLM_WORKER_MULTIPROC_METHOD" in gg)
     gc = open(os.path.join(ROOT, "kaggle", "gpu_common.py"), encoding="utf-8").read()
     check("поиск входов по дереву", "def find_file" in gc and "def find_embeddings" in gc)
     kr = open(os.path.join(ROOT, "scripts", "kaggle_run.py"), encoding="utf-8").read()

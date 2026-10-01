@@ -47,10 +47,26 @@ from rufin.queryfilter import IdfTable, copy_score, is_good_source, judge_query
 # семейств: иначе тест меряет, насколько ученик выучил стиль своего же
 # генератора. Обе модели записываются в DATASET_CARD.md.
 TRAIN_MODEL = "Qwen/Qwen2.5-7B-Instruct-AWQ"
-TEST_MODEL = "TheBloke/Mistral-7B-Instruct-v0.2-AWQ"
+# Модель для dev и теста — обязательно из другого семейства, чем TRAIN_MODEL:
+# иначе тест померит не качество поиска, а то, насколько ученик выучил стиль
+# своего же генератора. Но семейство мало выбрать — оно должно ещё и держать
+# русский. Mistral-7B-Instruct-v0.2 на пробе 30.09 выдал одиннадцать английских
+# вопросов из двадцати в тесте, а среди русских попадались «заполнение графф»
+# и «привести в информированное состояние». Vikhr-Nemo — Mistral-Nemo,
+# дообученный на русском: семейство по-прежнему не Qwen, а язык родной.
+# Запасная сборка, если эта не заведётся:
+#   mandanya/Vikhr-Nemo-12B-Instruct-R-21-09-24-AWQ
+TEST_MODEL = "NiGuLa/Vikhr-Nemo-12B-Instruct-R-21-09-24-awq-4bit"
 
+# Требование писать по-русски стоит первым и повторяется в требованиях
+# к каждому вопросу. Это не перестраховка: модель для теста берётся из
+# другого семейства нарочно, а другое семейство хуже держит русский —
+# Mistral-7B-Instruct на пробе выдал одиннадцать английских вопросов
+# из двадцати. Фильтр такие отбрасывает, но каждый отброшенный оплачен
+# временем видеокарты, и дешевле их не порождать.
 SYSTEM = ("Ты помогаешь составить набор проверочных вопросов к нормативным актам "
-          "Банка России. Отвечай только самим вопросом, без пояснений и без кавычек.")
+          "Банка России. Пиши ТОЛЬКО по-русски. Отвечай только самим вопросом, "
+          "без пояснений и без кавычек.")
 
 HEAD = """Ниже фрагмент нормативного акта Банка России.
 
@@ -61,6 +77,8 @@ HEAD = """Ниже фрагмент нормативного акта Банка
 
 COMMON = """
 Требования:
+- вопрос по-русски, целиком; латиница допустима только в обозначениях
+  вроде USD, IFRS, SWIFT;
 - своими словами, без дословных кусков из фрагмента длиннее трёх слов подряд;
 - конкретно: по запросу должен находиться именно этот фрагмент, а не любой
   документ Банка России;
@@ -110,6 +128,15 @@ def load_llm(model_path: str, dtype: str = "float16", quantization: str | None =
     деградации — а деградацию видно только по качеству вопросов, то есть
     когда квота уже потрачена.
     """
+    # vLLM поднимает движок отдельным процессом и по умолчанию делает это
+    # через fork. Форк не годится, если CUDA уже тронута в родителе, —
+    # а она тронута всегда: `pick_device()` спрашивает `torch.cuda
+    # .is_available()` первой же строкой, до всякой генерации. Падает это
+    # не там, где причина: «Cannot re-initialize CUDA in forked subprocess»
+    # прилетает из недр движка через полминуты после старта. Переменная
+    # ставится до импорта vllm — после него её уже не читают.
+    os.environ.setdefault("VLLM_WORKER_MULTIPROC_METHOD", "spawn")
+
     from vllm import LLM
     kwargs = dict(model=model_path, dtype=dtype, max_model_len=max_model_len,
                   gpu_memory_utilization=gpu_memory_utilization,
@@ -127,15 +154,36 @@ def _clean(text: str) -> str:
     return text.split("\n")[0].strip(" \"'«»")
 
 
+def _chat(tok, задание: str) -> str:
+    """Собрать запрос по шаблону модели, пережив отсутствие системной роли.
+
+    Шаблоны разных семейств несовместимы, и это не мелочь оформления.
+    Qwen принимает системную роль, а Mistral-7B-Instruct требует строгого
+    чередования user/assistant и на системное сообщение отвечает
+    `TemplateError: Conversation roles must alternate`. Модель другого
+    семейства для теста обязательна — иначе тест померит, насколько ученик
+    выучил стиль своего же генератора, — поэтому подстраиваться приходится
+    здесь, а не выбором модели.
+
+    Запасной путь не выбрасывает наставление, а приклеивает его к вопросу:
+    выбросить — значит менять задачу, и вопросы Mistral оказались бы
+    несопоставимы с вопросами Qwen.
+    """
+    try:
+        return tok.apply_chat_template(
+            [{"role": "system", "content": SYSTEM},
+             {"role": "user", "content": задание}],
+            tokenize=False, add_generation_prompt=True)
+    except Exception:
+        return tok.apply_chat_template(
+            [{"role": "user", "content": SYSTEM + "\n\n" + задание}],
+            tokenize=False, add_generation_prompt=True)
+
+
 def generate(llm, style: Style, passages: list[str], temperature: float = 0.7) -> list[str]:
     from vllm import SamplingParams
     tok = llm.get_tokenizer()
-    prompts = [
-        tok.apply_chat_template(
-            [{"role": "system", "content": SYSTEM},
-             {"role": "user", "content": HEAD.format(passage=p) + style.tail}],
-            tokenize=False, add_generation_prompt=True)
-        for p in passages]
+    prompts = [_chat(tok, HEAD.format(passage=p) + style.tail) for p in passages]
     params = SamplingParams(temperature=temperature, top_p=0.9,
                             max_tokens=style.max_tokens)
     out = llm.generate(prompts, params, use_tqdm=False)
@@ -265,10 +313,24 @@ def next_style(by_style: collections.Counter) -> int:
 
 
 def filter_by_teacher(queries: list[dict], chunks: list[dict], depth: int = 100,
-                      keep_top: int = 50, batch_size: int = 64,
+                      keep_top: int | None = None, batch_size: int = 64,
                       device: str = "cuda") -> tuple[list[dict], dict]:
     """Третий фильтр: учитель обязан видеть исходный фрагмент в первых
     `keep_top` из `depth` кандидатов BM25.
+
+    **Порог считается от глубины, а не задан числом, и это не мелочь.**
+    Эталон всегда среди кандидатов: если BM25 его не нашёл, его вставляют
+    силой. Значит после переранжирования его место — число от 1 до `depth`.
+    При жёстком пороге 50 и глубине 30 условие «место не хуже 50-го»
+    выполняется всегда, фильтр не отбрасывает ничего и стоит при этом час
+    с лишним видеокарты, а отчёт показывает бодрое «принято 12000 из 12000».
+    Ровно это и было заложено в план урезания: глубину предлагалось снизить
+    со 100 до 30, оставив порог 50, то есть выключить фильтр, думая,
+    что он лишь подешевел.
+
+    Поэтому по умолчанию порог — половина глубины, как было при исходных
+    100 и 50. Отношение и есть смысл: эталон обязан попасть в лучшую
+    половину того, что показали учителю.
 
     Зачем он нужен помимо двух прежних. Первые два смотрят на пару
     «вопрос и фрагмент» и ловят списывание и общие слова. Они пропускают
@@ -284,6 +346,17 @@ def filter_by_teacher(queries: list[dict], chunks: list[dict], depth: int = 100,
     import gpu_search as S
 
     from rufin.retrieval.bm25 import BM25Index
+
+    if keep_top is None:
+        keep_top = max(1, depth // 2)
+    if keep_top >= depth:
+        raise ValueError(
+            f"порог {keep_top} не меньше глубины {depth}: эталон всегда "
+            f"попадает в кандидатов, поэтому такой фильтр не отбрасывает "
+            f"ничего и только тратит время. Уменьшите порог или уберите "
+            f"--teacher-filter совсем.")
+    print(f"третий фильтр: глубина {depth}, порог {keep_top} "
+          f"(эталон обязан попасть в первые {keep_top} из {depth})", flush=True)
 
     texts = {c["chunk_id"]: c["text"] for c in chunks}
     t0 = time.time()

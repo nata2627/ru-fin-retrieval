@@ -34,6 +34,8 @@ import os
 import re
 import time
 
+import gpu_gen as G
+
 from rufin.annotation import RUBRIC
 
 DEFAULT_JUDGE = "Qwen/Qwen2.5-14B-Instruct-AWQ"
@@ -86,11 +88,12 @@ def judge(llm, pairs: list[dict], texts: dict[str, str], out_path: str,
         stats["фрагмент не найден"] += len(pairs[start:start + batch]) - len(part)
         if not part:
             continue
-        prompts = [tok.apply_chat_template(
-            [{"role": "system", "content": SYSTEM},
-             {"role": "user", "content": PROMPT.format(
-                 rubric=RUBRIC, query=p["vopros"], passage=texts[p["chunk_id"]])}],
-            tokenize=False, add_generation_prompt=True) for p in part]
+        # Через общий сборщик: он переживает шаблоны без системной роли.
+        # Судья сегодня Qwen, который её принимает, но модель судьи задаётся
+        # ключом --judge-model, и падать на этом при смене модели незачем.
+        prompts = [G._chat(tok, PROMPT.format(
+            rubric=RUBRIC, query=p["vopros"], passage=texts[p["chunk_id"]]))
+            for p in part]
         outs = llm.generate(prompts, params, use_tqdm=False)
         for p, o in zip(part, outs):
             raw = o.outputs[0].text.strip()

@@ -135,12 +135,41 @@ def notebook_from_script(script: str, args_line: str) -> dict:
         "            shutil.copy2(item, dst)\n",
         "os.chdir('/kaggle/working')\n",
         "print('в рабочей папке:', sorted(os.listdir('.'))[:12])\n",
+        "\n",
+        "# Каноническая нарезка кладётся туда, откуда скрипты берут готовую.\n",
+        "# Пересчитывать её здесь нельзя: нарезка зависит от версии токенизатора,\n",
+        "# а установка vLLM тянет свой transformers и сдвигает границы — 61 922\n",
+        "# фрагмента вместо 62 594 на том же корпусе. Идентификатор позиционный\n",
+        "# («акт#номер»), поэтому при сдвиге он не исчезает, а начинает указывать\n",
+        "# на другой текст, и эталон съезжает молча. Кэш сносится: упавший прогон\n",
+        "# успевает записать туда свою нарезку, а готовая берётся раньше новой.\n",
+        "готовая = (glob.glob('/kaggle/input/**/chunks_base.jsonl', recursive=True)\n",
+        "           + glob.glob('/kaggle/input/**/chunks_base.jsonl.gz', recursive=True))\n",
+        "if готовая:\n",
+        "    import gzip\n",
+        "    os.makedirs('/kaggle/working/chunks', exist_ok=True)\n",
+        "    цель = '/kaggle/working/chunks/base.jsonl'\n",
+        "    if os.path.exists(цель):\n",
+        "        os.remove(цель)\n",
+        "    opener = gzip.open if готовая[0].endswith('.gz') else open\n",
+        "    with opener(готовая[0], 'rb') as fi, open(цель, 'wb') as fo:\n",
+        "        shutil.copyfileobj(fi, fo, length=1 << 20)\n",
+        "    print('нарезка из входов:', sum(1 for _ in open(цель, encoding='utf-8')),\n",
+        "          'фрагментов')\n",
+        "else:\n",
+        "    print('ВНИМАНИЕ: канонической нарезки среди входов нет, будет посчитана '\n",
+        "          'заново — для этапа C это недопустимо')\n",
+        "\n",
+        "# vLLM поднимает движок отдельным процессом и по умолчанию форкается,\n",
+        "# а форк не годится, когда CUDA уже тронута в родителе.\n",
+        "os.environ.setdefault('VLLM_WORKER_MULTIPROC_METHOD', 'spawn')\n",
     ]
     launch = [
-        "import subprocess, sys\n",
+        "import os, subprocess, sys\n",
         f"cmd = [sys.executable, {script!r}] + {args_line!r}.split()\n",
         "print('запуск:', ' '.join(cmd), flush=True)\n",
-        "p = subprocess.run(cmd, cwd='/kaggle/working')\n",
+        "env = dict(os.environ, VLLM_WORKER_MULTIPROC_METHOD='spawn')\n",
+        "p = subprocess.run(cmd, cwd='/kaggle/working', env=env)\n",
         "raise SystemExit(p.returncode)\n",
     ]
     cells = [{"cell_type": "code", "metadata": {}, "source": s,
@@ -154,12 +183,22 @@ def notebook_from_script(script: str, args_line: str) -> dict:
 
 def push_kernel(user: str, slug: str, title: str, script: str, script_args: str,
                 dataset_sources: list[str], kernel_sources: list[str],
-                gpu: bool = True, machine: str = "") -> str:
+                gpu: bool = True, machine: str = "", notebook: str = "") -> str:
     folder = os.path.join(DIST, "kernel_" + slug)
     shutil.rmtree(folder, ignore_errors=True)
     os.makedirs(folder)
-    with open(os.path.join(folder, "run.ipynb"), "w", encoding="utf-8") as f:
-        json.dump(notebook_from_script(script, script_args), f, ensure_ascii=False, indent=1)
+    if notebook:
+        # Готовая тетрадь из проекта вместо собранной на лету. Нужна там, где
+        # прогон — не одна команда, а порядок шагов с проверками между ними:
+        # этап C ставит библиотеки, тянет веса под предохранителем, гоняет
+        # пробу и только потом считает. Повторять это генератором из двух
+        # ячеек значило бы держать одну логику в двух местах, и они разойдутся.
+        shutil.copyfile(notebook, os.path.join(folder, "run.ipynb"))
+        print(f"  тетрадь: {os.path.relpath(notebook, ROOT)}")
+    else:
+        with open(os.path.join(folder, "run.ipynb"), "w", encoding="utf-8") as f:
+            json.dump(notebook_from_script(script, script_args), f,
+                      ensure_ascii=False, indent=1)
     # machine_shape задаёт конфигурацию узла. Пустое значение означает выбор
     # по умолчанию — узел с двумя T4, который дефицитнее и потому дольше ждёт
     # очереди. Наш код работает с одной картой, поэтому просим одиночную.
@@ -227,7 +266,7 @@ def main() -> None:
     p = sub.add_parser("queries", help="загрузить набор запросов")
 
     p = sub.add_parser("run", help="собрать ноутбук, запустить и дождаться")
-    p.add_argument("stage", choices=["a", "b", "export", "rerank"])
+    p.add_argument("stage", choices=["a", "b", "c", "export", "rerank"])
     p.add_argument("--slug", default=None)
     p.add_argument("--source", default="ru-fin",
                    help="ядро, чей вывод подключается: там лежат матрицы этапа A")
@@ -236,6 +275,9 @@ def main() -> None:
     p.add_argument("--machine", default="p100",
                    help="конфигурация узла: p100 — одна карта, быстрее получить; "
                         "пусто — по умолчанию T4 x2, дефицитнее")
+    p.add_argument("--notebook", default=None,
+                   help="запустить готовую тетрадь из notebooks/ вместо собранной "
+                        "из скрипта этапа")
     p.add_argument("--no-gpu", action="store_true",
                    help="считать без видеокарты: квота GPU не тратится, а ядер "
                         "процессора сессии достаётся больше")
@@ -260,7 +302,19 @@ def main() -> None:
         folder = os.path.join(DIST, "queries")
         shutil.rmtree(folder, ignore_errors=True)
         os.makedirs(folder)
-        shutil.copy2(os.path.join(ROOT, "data", "queries", "queries.jsonl"), folder)
+        # Сплит и лист пула — не «на всякий случай», а условие запуска: без
+        # сплита этап C откажется генерировать (вопросы ушли бы на акты теста,
+        # и утечку потом не отследить), без пула судье нечего размечать.
+        # Отсутствие любого из них — не молчаливый пропуск, а предупреждение:
+        # иначе оно всплывёт на видеокарте, когда квота уже пошла.
+        for name in ("queries.jsonl", "split.json", "pool_candidates.tsv"):
+            src = os.path.join(ROOT, "data", "queries", name)
+            if os.path.exists(src):
+                shutil.copy2(src, folder)
+            elif name == "queries.jsonl":
+                raise SystemExit("нет data/queries/queries.jsonl: `make queries`")
+            else:
+                print(f"  ВНИМАНИЕ: {name} нет, уезжает датасет без него")
         for name in ("base__bm25.jsonl", "base__dense-bge-m3.jsonl", "base__hybrid.jsonl"):
             src = os.path.join(ROOT, "data", "runs", name)
             if os.path.exists(src):
@@ -288,6 +342,10 @@ def main() -> None:
             # Переранжирование отдельным маленьким прогоном: всё остальное
             # уже посчитано, и повторять его незачем.
             "rerank": ("gpu_rerank.py", "ru-fin-rerank-only", "ru fin rerank only", [], True),
+            # Этап C поднимает языковую модель сам и матрицы этапа A не трогает:
+            # вывод прежнего ядра ему не нужен, а подключённый — только лишние
+            # гигабайты на монтирование и лишний источник старого кода.
+            "c": ("run_phase_c.py", "ru-fin-phase-c", "ru-fin phase C", [], True),
         }
         script, slug, title, kernels, gpu = stages[args.stage]
         if args.slug:
@@ -304,10 +362,10 @@ def main() -> None:
                 slug = f"{slug}-cpu"
                 title = f"{title} cpu"
         datasets = [f"{user}/{DATASET}"]
-        if args.stage in ("b", "rerank"):
+        if args.stage in ("b", "c", "rerank"):
             datasets.append(f"{user}/{QUERIES_DATASET}")
         ref = push_kernel(user, slug, title, script, args.args, datasets, kernels,
-                          gpu, args.machine)
+                          gpu, args.machine, args.notebook or "")
         if not args.no_wait:
             state = wait(ref)
             print(f"\nсостояние: {state}")
