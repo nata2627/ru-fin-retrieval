@@ -27,6 +27,16 @@
 Поэтому шкала не угадывается, а задаётся: логиты. Для страховки
 записанное всё равно проверяется по разбросу, и шкала пишется в файл.
 
+**4. Учитель сверяется с тем, которым измерено 0,690.** Веса берутся
+из модели, подключённой входом Kaggle, а не качаются с HuggingFace:
+секреты через API не прицепить, а без токена скачивание режется
+по скорости. Но зеркало — это чужая копия, и подменённые или просто
+другие веса ничем себя не выдадут: дистилляция пойдёт, лосс упадёт,
+а учить будут не тому. Поэтому перед дорогой частью на двадцати запросах
+воспроизводится уже посчитанная выдача `base__hybrid-rerank.jsonl`.
+Если первые места совпали, это тот самый учитель. Тридцать секунд против
+полутора часов неизвестности.
+
 Цена прогона печатается заранее числом: при глубине 30 и 6112 вопросах
 это 183 тысячи проходов кросс-энкодера.
 """
@@ -52,6 +62,101 @@ from rufin.training.negatives import NegativeRules, detect_scale, pick_all  # no
 from rufin.training.pairs import assert_only_train_acts, read_jsonl, train_acts  # noqa: E402
 
 
+def check_arch(model_path: str, ожидания: dict, кто: str) -> dict:
+    """Сверить устройство модели с ожидаемым и напечатать его в отчёт.
+
+    Проверяется не всё подряд, а ровно то, от чего код зависит молча:
+    у учителя одна голова классификатора (иначе `logits.view(-1)` вернул бы
+    не оценки), у ученика 384 измерения (на них построен весь проект).
+    Остальное печатается для журнала.
+    """
+    from transformers import AutoConfig
+    cfg = AutoConfig.from_pretrained(model_path)
+    свойства = {k: getattr(cfg, k, None) for k in
+                ("model_type", "vocab_size", "hidden_size", "num_hidden_layers",
+                 "num_labels")}
+    print(f"{кто}: {свойства}", flush=True)
+    for ключ, ждём in ожидания.items():
+        есть = свойства.get(ключ)
+        if есть != ждём:
+            raise SystemExit(
+                f"{кто}: {ключ} = {есть}, а должно быть {ждём}. Подключена "
+                f"не та модель. Веса берутся из чужого зеркала, и ошибка "
+                f"здесь была бы тихой: обучение пошло бы, а учило бы не тому.")
+    return свойства
+
+
+def verify_teacher(model_path: str, chunks: list[dict], device: str,
+                   сколько: int = 20, batch_size: int = 64) -> dict:
+    """Тот ли это учитель, которым измерено 0,690.
+
+    Берётся уже посчитанная гибридная выдача и её переранжированный
+    вариант — оба лежат в проекте с этапа 2, оба получены весами
+    с HuggingFace. Подключённая модель переранжирует те же кандидаты,
+    и порядок сравнивается. Совпали первые места — тот самый учитель.
+
+    Почему именно первые места, а не весь порядок. Половинная точность
+    и другой размер батча двигают близкие оценки, и пара перестановок
+    в хвосте ничего не значит. А первое место — это то, что мерит метрика,
+    и его совпадение на двадцати запросах уже не случайность.
+    """
+    гибрид = common.find_file("base__hybrid.jsonl")
+    эталон = common.find_file("base__hybrid-rerank.jsonl")
+    запросы = common.find_file("queries.jsonl")
+    if not (гибрид and эталон and запросы):
+        print("СВЕРКА УЧИТЕЛЯ НЕ СДЕЛАНА: среди входов нет готовых выдач "
+              "base__hybrid.jsonl и base__hybrid-rerank.jsonl. Подключите "
+              "датасет запросов — без сверки источник весов ничем "
+              "не подтверждён", flush=True)
+        return {"сверка": "нечем"}
+
+    кандидаты = {r["query_id"]: r["ranked"] for r in read_jsonl(гибрид)}
+    было = {r["query_id"]: r["ranked"] for r in read_jsonl(эталон)}
+    тексты_запросов = {q["query_id"]: q["text"] for q in read_jsonl(запросы)}
+    тексты = {c["chunk_id"]: c["text"] for c in chunks}
+
+    общие = [q for q in sorted(кандидаты) if q in было and q in тексты_запросов
+             and all(c in тексты for c in кандидаты[q])]
+    общие = общие[:сколько]
+    if not общие:
+        print("СВЕРКА УЧИТЕЛЯ НЕ СДЕЛАНА: не нашлось запросов, у которых есть "
+              "и выдача, и переранжирование, и все тексты", flush=True)
+        return {"сверка": "нечем"}
+
+    пары, адрес = [], []
+    for qid in общие:
+        for chunk_id in кандидаты[qid]:
+            пары.append((тексты_запросов[qid], тексты[chunk_id]))
+            адрес.append((qid, chunk_id))
+    print(f"сверка учителя: {len(общие)} запросов, {len(пары)} пар", flush=True)
+    оценки = score_pairs(пары, model_path, device, batch_size=batch_size)
+
+    по_вопросу: dict[str, dict[str, float]] = {}
+    for (qid, chunk_id), оценка in zip(адрес, оценки):
+        по_вопросу.setdefault(qid, {})[chunk_id] = float(оценка)
+
+    совпало_первых = 0
+    совпало_пятёрок = 0
+    for qid in общие:
+        наш = [c for c, _ in sorted(по_вопросу[qid].items(), key=lambda kv: -kv[1])]
+        совпало_первых += int(наш[0] == было[qid][0])
+        совпало_пятёрок += len(set(наш[:5]) & set(было[qid][:5])) / 5
+    доля = совпало_первых / len(общие)
+    итог = {"сверка": "сделана", "запросов": len(общие),
+            "совпало первых мест": round(доля, 3),
+            "пересечение первых пяти": round(совпало_пятёрок / len(общие), 3)}
+    print(f"сверка учителя: первые места совпали у {совпало_первых} из "
+          f"{len(общие)}, пересечение первых пяти "
+          f"{итог['пересечение первых пяти']:.2f}", flush=True)
+    if доля < 0.9:
+        raise SystemExit(
+            f"учитель не воспроизводит выдачу этапа 2: первые места совпали "
+            f"только у {доля:.0%} запросов. Это другие веса, и дистилляция "
+            f"из них училась бы не тому, чем измерено 0,690. Проверьте, какая "
+            f"модель подключена входом, или уберите её и качайте с HuggingFace.")
+    return итог
+
+
 def score_pairs(pairs: list[tuple[str, str]], model_path: str, device: str,
                 batch_size: int = 64, max_length: int = 512) -> np.ndarray:
     """Логиты кросс-энкодера по парам «вопрос, фрагмент».
@@ -59,6 +164,15 @@ def score_pairs(pairs: list[tuple[str, str]], model_path: str, device: str,
     Пары сортируются по длине внутри прогона и возвращаются в исходном
     порядке: при выравнивании по самой длинной паре батча это заметная
     разница во времени, а на результат не влияет вовсе.
+
+    **Считается на всех картах узла, а не на первой.** Узел `GPU T4 ×2`
+    даёт две карты, и квота идёт за обе; код с `device="cuda"` работает
+    на первой, а вторая простаивает. На этапе A проект потерял так 2,5 часа
+    недельной квоты. Здесь работа делится по парам, между примерами связи
+    нет вовсе, поэтому `DataParallel` даёт почти двукратное ускорение
+    без всяких оговорок. Батч умножается на число карт: иначе каждой
+    достанется по половине прежнего, и выигрыш съест накладной расход
+    на раздачу.
     """
     import torch
     from transformers import AutoModelForSequenceClassification, AutoTokenizer
@@ -67,6 +181,11 @@ def score_pairs(pairs: list[tuple[str, str]], model_path: str, device: str,
     kwargs = common.half_kwargs(device)
     model = AutoModelForSequenceClassification.from_pretrained(model_path, **kwargs)
     model.to(device).eval()
+    карт = torch.cuda.device_count() if device == "cuda" else 1
+    if карт > 1:
+        model = torch.nn.DataParallel(model)
+        batch_size *= карт
+        print(f"   карт {карт}, считаем на всех; батч {batch_size}", flush=True)
 
     порядок = sorted(range(len(pairs)), key=lambda i: len(pairs[i][1]))
     out = np.zeros(len(pairs), dtype="float32")
@@ -93,7 +212,8 @@ def score_pairs(pairs: list[tuple[str, str]], model_path: str, device: str,
 
 
 def candidates_for(queries: list[dict], chunks: list[dict], depth: int,
-                   device: str, batch_size: int = 128) -> dict[str, list[str]]:
+                   device: str, batch_size: int = 128,
+                   student: str = STUDENT) -> dict[str, list[str]]:
     """Гибридная выдача по обучающим фрагментам: BM25 плюс плотный поиск."""
     ids = [c["chunk_id"] for c in chunks]
     texts = [c["text"] for c in chunks]
@@ -104,7 +224,7 @@ def candidates_for(queries: list[dict], chunks: list[dict], depth: int,
           flush=True)
 
     spec = MODELS[SPEC]
-    model = common.load_encoder(STUDENT, device, spec.max_seq_length)
+    model = common.load_encoder(student, device, spec.max_seq_length)
     t0 = time.time()
     corpus = model.encode([spec.passage_prefix + t for t in texts],
                           batch_size=batch_size, convert_to_numpy=True,
@@ -151,7 +271,15 @@ def main() -> None:
     ap.add_argument("--train", default=None, help="synthetic_train.jsonl; ищется сам")
     ap.add_argument("--out", default="/kaggle/working/train")
     ap.add_argument("--chunks-cache", default="/kaggle/working/chunks")
-    ap.add_argument("--teacher", default=TEACHER)
+    ap.add_argument("--teacher", default=TEACHER,
+                    help="учитель: имя на HuggingFace или путь. Подключённая "
+                         "входом модель находится сама")
+    ap.add_argument("--student", default=STUDENT,
+                    help="ученик: им считается плотная часть гибридной выдачи")
+    ap.add_argument("--verify-teacher", type=int, default=20,
+                    help="на скольких запросах воспроизводить выдачу этапа 2; "
+                         "0 — не сверять, но тогда источник весов ничем "
+                         "не подтверждён")
     ap.add_argument("--depth", type=int, default=30,
                     help="сколько кандидатов на вопрос. Цена прогона линейна "
                          "по глубине: 30 даёт 183 тысячи проходов учителя")
@@ -167,6 +295,11 @@ def main() -> None:
         print("ВНИМАНИЕ: видеокарта не подключена. Settings -> Accelerator -> GPU",
               flush=True)
 
+    # Веса: подключённая входом модель, иначе HuggingFace. Какой источник
+    # сработал, печатается — молча подменять источник весов нельзя.
+    teacher = common.resolve_model(args.teacher)
+    student = common.resolve_model(args.student)
+
     os.makedirs(args.out, exist_ok=True)
     out_path = os.path.join(args.out, "train_prepared.jsonl")
     report_path = os.path.join(args.out, "report_prepare.json")
@@ -174,6 +307,11 @@ def main() -> None:
         print(f"готово раньше: {out_path}. Пересчитывать незачем — удалите файл, "
               f"если нужен новый прогон", flush=True)
         return
+
+    # Устройство моделей сверяется до всякого счёта: зеркало это чужая
+    # копия, и подменённые веса ничем себя не выдадут.
+    арх_учителя = check_arch(teacher, {"num_labels": 1}, "учитель")
+    арх_ученика = check_arch(student, {"hidden_size": 384}, "ученик")
 
     ruler = common.make_ruler()
     acts = common.load_acts(args.acts)
@@ -208,11 +346,19 @@ def main() -> None:
     print(f"обучающих вопросов {len(queries)}: {train_path}", flush=True)
     assert_only_train_acts([q["gold_chunk_id"] for q in queries], split, "эталоны обучения")
 
+    # Сверка учителя — до дорогой части. Тридцать секунд против полутора
+    # часов, потраченных на оценки чужой модели.
+    сверка = ({"сверка": "выключена"} if not args.verify_teacher
+              else verify_teacher(teacher, chunks, device,
+                                  сколько=args.verify_teacher,
+                                  batch_size=args.batch_size))
+
     print(f"\nпроходов кросс-энкодера: {len(queries)} × {args.depth} = "
           f"{len(queries) * args.depth}", flush=True)
 
     t0 = time.time()
-    кандидаты = candidates_for(queries, обучающие, args.depth, device)
+    кандидаты = candidates_for(queries, обучающие, args.depth, device,
+                               student=student)
     секунд_выдача = time.time() - t0
 
     тексты = {c["chunk_id"]: c["text"] for c in обучающие}
@@ -222,7 +368,7 @@ def main() -> None:
         for chunk_id in кандидаты[q["query_id"]]:
             пары.append((q["text"], тексты[chunk_id]))
             адрес.append((q["query_id"], chunk_id))
-    оценки = score_pairs(пары, args.teacher, device, batch_size=args.batch_size)
+    оценки = score_pairs(пары, teacher, device, batch_size=args.batch_size)
 
     по_вопросу: dict[str, dict[str, float]] = {}
     for (qid, chunk_id), score in zip(адрес, оценки):
@@ -247,6 +393,12 @@ def main() -> None:
     места = sorted(r["teacher_place"] for r in записи)
     report = {
         "учитель": args.teacher,
+        "веса учителя": teacher,
+        "устройство учителя": арх_учителя,
+        "ученик": args.student,
+        "веса ученика": student,
+        "устройство ученика": арх_ученика,
+        "сверка учителя с этапом 2": сверка,
         "шкала оценок": scale,
         "глубина": args.depth,
         "вопросов": len(queries),

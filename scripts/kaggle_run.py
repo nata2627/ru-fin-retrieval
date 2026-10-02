@@ -33,6 +33,23 @@ PKG = os.path.join(DIST, "kaggle")
 DATASET = "ru-fin-retrieval"
 QUERIES_DATASET = "ru-fin-queries"
 
+# Модели, подключаемые входом вместо скачивания с HuggingFace. Секреты Kaggle
+# через API не прицепить вовсе — ядро, созданное командой, токена не увидит, —
+# а без токена скачивание режется по скорости. Входом модель приезжает
+# мгновенно и без сети.
+#
+# Это чужие зеркала, поэтому `gpu_prepare.py` их сверяет: устройство модели
+# против ожидаемого и, главное, воспроизведение уже посчитанной выдачи
+# `base__hybrid-rerank.jsonl`. Совпали первые места — тот самый учитель,
+# которым измерено 0,690. Не совпали — прогон отказывается считать.
+MODELS = {
+    # зеркало intfloat/multilingual-e5-small, закреплено за коммитом
+    # 614241f622f53c4eeff9890bdc4f31cfecc418b3
+    "e5-small": "dangkhoa2016/intfloat-multilingual-e5-small/transformers/default/1",
+    # зеркало BAAI/bge-reranker-v2-m3, 2,29 ГБ — размер весов в fp32
+    "reranker": "andreasbis/baai-bge-reranker-v2-m3/transformers/default/1",
+}
+
 
 def run(cmd: list[str], **kw) -> subprocess.CompletedProcess:
     print("  $ " + " ".join(cmd), flush=True)
@@ -183,7 +200,8 @@ def notebook_from_script(script: str, args_line: str) -> dict:
 
 def push_kernel(user: str, slug: str, title: str, script: str, script_args: str,
                 dataset_sources: list[str], kernel_sources: list[str],
-                gpu: bool = True, machine: str = "", notebook: str = "") -> str:
+                gpu: bool = True, machine: str = "", notebook: str = "",
+                model_sources: list[str] | None = None) -> str:
     folder = os.path.join(DIST, "kernel_" + slug)
     shutil.rmtree(folder, ignore_errors=True)
     os.makedirs(folder)
@@ -208,8 +226,11 @@ def push_kernel(user: str, slug: str, title: str, script: str, script_args: str,
         "enable_gpu": gpu, "enable_tpu": False, "enable_internet": True,
         "machine_shape": machine,
         "dataset_sources": dataset_sources, "kernel_sources": kernel_sources,
-        "competition_sources": [], "model_sources": [],
+        "competition_sources": [], "model_sources": model_sources or [],
     }
+    if model_sources:
+        for m in model_sources:
+            print(f"  модель входом: {m}")
     with open(os.path.join(folder, "kernel-metadata.json"), "w", encoding="utf-8") as f:
         json.dump(meta, f, ensure_ascii=False, indent=1)
     # Новая версия не отменяет запуск предыдущей: Kaggle оставляет обе считаться,
@@ -266,7 +287,7 @@ def main() -> None:
     p = sub.add_parser("queries", help="загрузить набор запросов")
 
     p = sub.add_parser("run", help="собрать ноутбук, запустить и дождаться")
-    p.add_argument("stage", choices=["a", "b", "c", "export", "rerank"])
+    p.add_argument("stage", choices=["a", "b", "c", "d0", "d", "export", "rerank"])
     p.add_argument("--slug", default=None)
     p.add_argument("--source", default="ru-fin",
                    help="ядро, чей вывод подключается: там лежат матрицы этапа A")
@@ -307,7 +328,12 @@ def main() -> None:
         # и утечку потом не отследить), без пула судье нечего размечать.
         # Отсутствие любого из них — не молчаливый пропуск, а предупреждение:
         # иначе оно всплывёт на видеокарте, когда квота уже пошла.
-        for name in ("queries.jsonl", "split.json", "pool_candidates.tsv"):
+        # Этапу D нужны ещё обучающая выборка, dev, разметка и состав
+        # подвыборок: dev на видеокарте обязан считаться тем же составом
+        # и тем же эталоном, что в локальном отчёте.
+        for name in ("queries.jsonl", "split.json", "pool_candidates.tsv",
+                     "synthetic_train.jsonl", "synthetic_dev.jsonl",
+                     "qrels.tsv", "podvyborki.json"):
             src = os.path.join(ROOT, "data", "queries", name)
             if os.path.exists(src):
                 shutil.copy2(src, folder)
@@ -315,7 +341,11 @@ def main() -> None:
                 raise SystemExit("нет data/queries/queries.jsonl: `make queries`")
             else:
                 print(f"  ВНИМАНИЕ: {name} нет, уезжает датасет без него")
-        for name in ("base__bm25.jsonl", "base__dense-bge-m3.jsonl", "base__hybrid.jsonl"):
+        # Переранжированная выдача едет не для счёта, а для сверки: ею
+        # проверяется, что подключённое зеркало учителя — та самая модель,
+        # которой измерено 0,690.
+        for name in ("base__bm25.jsonl", "base__dense-bge-m3.jsonl",
+                     "base__hybrid.jsonl", "base__hybrid-rerank.jsonl"):
             src = os.path.join(ROOT, "data", "runs", name)
             if os.path.exists(src):
                 shutil.copy2(src, folder)
@@ -346,6 +376,11 @@ def main() -> None:
             # вывод прежнего ядра ему не нужен, а подключённый — только лишние
             # гигабайты на монтирование и лишний источник старого кода.
             "c": ("run_phase_c.py", "ru-fin-phase-c", "ru-fin phase C", [], True),
+            # D0 считается отдельным прогоном: он самый дорогой в этапе,
+            # его файл нужен сразу двум этапам рецепта, и повторять его
+            # ради перезапуска обучения незачем.
+            "d0": ("gpu_prepare.py", "ru-fin-d0", "ru fin d0", [], True),
+            "d": ("run_phase_d.py", "ru-fin-phase-d", "ru-fin phase D", [], True),
         }
         script, slug, title, kernels, gpu = stages[args.stage]
         if args.slug:
@@ -362,10 +397,14 @@ def main() -> None:
                 slug = f"{slug}-cpu"
                 title = f"{title} cpu"
         datasets = [f"{user}/{DATASET}"]
-        if args.stage in ("b", "c", "rerank"):
+        if args.stage in ("b", "c", "d0", "d", "rerank"):
             datasets.append(f"{user}/{QUERIES_DATASET}")
+        # Этапу D обе модели нужны обязательно: ученик считает плотную часть
+        # выдачи, учитель — оценки. Остальным этапам модели входом не нужны,
+        # у них свои источники весов.
+        models = list(MODELS.values()) if args.stage in ("d0", "d") else []
         ref = push_kernel(user, slug, title, script, args.args, datasets, kernels,
-                          gpu, args.machine, args.notebook or "")
+                          gpu, args.machine, args.notebook or "", models)
         if not args.no_wait:
             state = wait(ref)
             print(f"\nсостояние: {state}")

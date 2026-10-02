@@ -33,11 +33,17 @@ def resolve_acts(path: str | None = None) -> str:
     превращается в `acts.jsonl`. Поэтому путь не задаётся жёстко: проверяются
     оба варианта, а если не указан вовсе — корпус ищется среди подключённых
     входов и в рабочей папке.
+
+    Глубина монтирования тоже не задаётся. Датасет приезжает то как
+    `/kaggle/input/<слаг>/`, то как `/kaggle/input/datasets/<кто>/<слаг>/`,
+    и зависит это не от нас. Поиск по одному уровню находил корпус годами,
+    а потом перестал — обход по дереву не ломается от переезда.
     """
     candidates: list[str] = []
     if path:
         candidates += [path, path[:-3] if path.endswith(".gz") else path + ".gz"]
-    candidates += sorted(glob.glob("/kaggle/input/*/acts.jsonl*"))
+    candidates += sorted(glob.glob("/kaggle/input/**/acts.jsonl*", recursive=True),
+                         key=len)
     candidates += sorted(glob.glob("/kaggle/working/acts.jsonl*"))
     candidates += sorted(glob.glob("acts.jsonl*"))
     for c in candidates:
@@ -152,6 +158,38 @@ def build_chunks_cached(acts: list[dict], config: str, ruler: TokenRuler,
 def pick_device() -> str:
     import torch
     return "cuda" if torch.cuda.is_available() else "cpu"
+
+
+def resolve_model(hf_id: str, root: str = "/kaggle/input") -> str:
+    """Путь к весам: сначала модель, подключённая входом, потом HuggingFace.
+
+    Зачем вообще искать локально. Скачивание с HuggingFace без токена
+    режется по скорости, а секреты Kaggle через API не прицепить вовсе:
+    ядро, созданное командой, токена не увидит никогда. Модели же
+    подключаются входом как есть, мгновенно и без сети.
+
+    Ищется не по известному пути, а по содержимому: каталог с `config.json`,
+    в пути которого встречается имя модели. Раскладка у входов разная
+    (`<модель>/<каркас>/<вариант>/<версия>`), и задавать её жёстко —
+    тот же способ потерять час, что и с датасетами.
+
+    Если ничего не нашлось, возвращается имя на HuggingFace: это рабочий
+    запасной путь, а не ошибка. Какой из двух сработал, печатается —
+    молча подменять источник весов нельзя.
+    """
+    имя = hf_id.split("/")[-1].lower()
+    находки = []
+    for path in glob.glob(os.path.join(root, "**", "config.json"), recursive=True):
+        каталог = os.path.dirname(path)
+        if имя in каталог.lower().replace("_", "-"):
+            находки.append(каталог)
+    if not находки:
+        print(f"модель {hf_id}: среди входов нет, качаем с HuggingFace", flush=True)
+        return hf_id
+    # самый короткий путь: корень модели, а не вложенная папка вроде onnx/
+    выбран = sorted(находки, key=lambda p: (len(p.split(os.sep)), len(p)))[0]
+    print(f"модель {hf_id}: взята из входов, {выбран}", flush=True)
+    return выбран
 
 
 def half_kwargs(device: str) -> dict:
