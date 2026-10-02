@@ -7,8 +7,13 @@
 
     --step baseline   нулевая точка: dev необученного ученика
     --step train      обучение и оценка по dev, этап за этапом
+    --step all        нулевая точка и рецепт подряд, одним процессом
     --step final      один прогон по всему набору запросов
     --step forget     катастрофическое забывание на посторонних данных
+
+`all` не включает `final` нарочно. Прогон может оборваться на середине
+рецепта, и тогда `final` посчитал бы тест по неустоявшемуся рецепту —
+а тест трогается один раз, после того как рецепт зафиксирован.
 
 Подготовка (D0) живёт отдельным скриптом `gpu_prepare.py`: она считается
 один раз, стоит дороже всего остального вместе и своим файлом пользуются
@@ -234,6 +239,8 @@ def шаг_train(env: Окружение, args, journal: Journal) -> None:
                 str(d): итог[d]["NDCG@10"] for d in sorted(итог) if isinstance(d, int)}
         journal.add(запись)
         journal.save(args.journal)
+        if args.keep_only_best:
+            прибрать_веса(args, journal)
         если_есть = (f", разница {запись.diff['mean']:+.3f} "
                      f"с «{запись.compared_with}»") if запись.diff else ""
         print(f"\n{(запись.verdict or 'без вердикта').upper()}: "
@@ -292,6 +299,39 @@ def план(args, journal: Journal):
     yield from FIXED
     yield from stage_d(состав_лучшего(journal))
     yield from stage_e(состав_лучшего(journal))
+
+
+def шаг_all(env: Окружение, args, journal: Journal) -> None:
+    """Нулевая точка и весь рецепт одним процессом.
+
+    Выгода не в удобстве, а в том, что корпус, сплит и разметка читаются
+    один раз на всё: сборка окружения занимает минуты, а шагов в рецепте
+    дюжина.
+    """
+    шаг_baseline(env, args, journal)
+    шаг_train(env, args, journal)
+
+
+def прибрать_веса(args, journal: Journal) -> None:
+    """Оставить веса только лучшего принятого этапа.
+
+    Можно себе позволить ровно потому, что каждый этап обучается с исходных
+    весов: чтобы продолжить рецепт после обрыва, нужен только журнал,
+    а веса отклонённого этапа не нужны вовсе. Без уборки вывод прогона
+    это дюжина папок по полгигабайта, и подключить его входом следующему
+    прогону становится дорого.
+    """
+    import shutil
+    лучшее = journal.best()
+    беречь = {лучшее.tag} if лучшее else set()
+    if not os.path.isdir(args.weights):
+        return
+    for имя in sorted(os.listdir(args.weights)):
+        путь = os.path.join(args.weights, имя)
+        if os.path.isdir(путь) and имя not in беречь:
+            shutil.rmtree(путь, ignore_errors=True)
+            print(f"   веса {имя} убраны: этап не лучший, а обучение всё равно "
+                  f"начинается с исходных", flush=True)
 
 
 def шаг_final(env: Окружение, args, journal: Journal) -> None:
@@ -397,7 +437,7 @@ def шаг_forget(env: Окружение, args, journal: Journal) -> None:
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--step", required=True,
-                    choices=("baseline", "train", "final", "forget"))
+                    choices=("baseline", "train", "all", "final", "forget"))
     ap.add_argument("--tags", nargs="*", default=None,
                     help="какие этапы считать; по умолчанию весь рецепт")
     ap.add_argument("--acts", default=None)
@@ -423,12 +463,17 @@ def main() -> None:
     ap.add_argument("--forget-queries", type=int, default=300)
     ap.add_argument("--force", action="store_true",
                     help="переделать этап, уже записанный в журнал")
+    ap.add_argument("--keep-only-best", action="store_true",
+                    help="держать веса только лучшего принятого этапа. Можно "
+                         "потому, что обучение каждого этапа начинается "
+                         "с исходных весов: для продолжения рецепта нужен "
+                         "только журнал")
     args = ap.parse_args()
 
     os.makedirs(os.path.dirname(args.journal), exist_ok=True)
     journal = Journal.load(args.journal)
     env = Окружение(args)
-    {"baseline": шаг_baseline, "train": шаг_train,
+    {"baseline": шаг_baseline, "train": шаг_train, "all": шаг_all,
      "final": шаг_final, "forget": шаг_forget}[args.step](env, args, journal)
 
 

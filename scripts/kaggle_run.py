@@ -380,7 +380,10 @@ def main() -> None:
             # его файл нужен сразу двум этапам рецепта, и повторять его
             # ради перезапуска обучения незачем.
             "d0": ("gpu_prepare.py", "ru-fin-d0", "ru fin d0", [], True),
-            "d": ("run_phase_d.py", "ru-fin-phase-d", "ru-fin phase D", [], True),
+            # Рецепту нужен вывод подготовки: трудные негативы и оценки
+            # учителя считаются один раз и подключаются входом.
+            "d": ("run_phase_d.py", "ru-fin-phase-d", "ru-fin phase D",
+                  [f"{user}/ru-fin-d0"], True),
         }
         script, slug, title, kernels, gpu = stages[args.stage]
         if args.slug:
