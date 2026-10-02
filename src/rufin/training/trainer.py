@@ -20,6 +20,7 @@
 """
 from __future__ import annotations
 
+import inspect
 import json
 import os
 import time
@@ -163,7 +164,7 @@ def train(cfg: TrainConfig, наборы: dict, out_dir: str, weights: str = "",
     # половину батча, поэтому при двух наборах остаётся обычный сэмплер.
     sampler = BatchSamplers.NO_DUPLICATES if tuple(cfg.datasets) == ("pairs",) \
         else BatchSamplers.BATCH_SAMPLER
-    args = SentenceTransformerTrainingArguments(
+    параметры = dict(
         output_dir=os.path.join(out_dir, "trainer"),
         num_train_epochs=cfg.epochs,
         per_device_train_batch_size=cfg.batch,
@@ -179,6 +180,20 @@ def train(cfg: TrainConfig, наборы: dict, out_dir: str, weights: str = "",
         batch_sampler=sampler,
         multi_dataset_batch_sampler=MultiDatasetBatchSamplers.PROPORTIONAL,
     )
+    # Версия библиотеки на видеокарте заранее не известна и успела уйти
+    # далеко вперёд от той, на которой код писался. Имена параметров
+    # обучения между версиями переименовывались, и падение на неизвестном
+    # ключе стоило бы прогона целиком. Поэтому неизвестные ключи
+    # отбрасываются вслух: пропажа сэмплера меняет обучение, и знать
+    # об этом надо из вывода, а не гадать по цифрам.
+    известные = set(inspect.signature(SentenceTransformerTrainingArguments.__init__)
+                    .parameters)
+    лишние = [k for k in параметры if k not in известные]
+    for k in лишние:
+        print(f"[{cfg.tag}] параметр {k} эта версия библиотеки не знает, "
+              f"обучение пойдёт без него", flush=True)
+        параметры.pop(k)
+    args = SentenceTransformerTrainingArguments(**параметры)
     # При двух наборах передаётся DatasetDict, а не обычный словарь: ключи
     # набора и ключи функций потерь обязаны совпасть, и DatasetDict это
     # требование выражает, а не подразумевает.
@@ -194,7 +209,10 @@ def train(cfg: TrainConfig, наборы: dict, out_dir: str, weights: str = "",
     seconds = time.time() - t0
 
     os.makedirs(out_dir, exist_ok=True)
-    model.save(out_dir)
+    # save_pretrained — нынешнее имя, save — прежнее. Веса, не сохранённые
+    # из-за переименования метода, означают потерянный прогон.
+    сохранить = getattr(model, "save_pretrained", None) or model.save
+    сохранить(out_dir)
     отчёт = {
         "метка": cfg.tag,
         "секунд": round(seconds, 1),
