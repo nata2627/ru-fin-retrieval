@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import gc
 import json
 import os
@@ -81,6 +82,11 @@ def main() -> None:
     ap.add_argument("--chunks", default="base")
     ap.add_argument("--queries", default=os.path.join(QDIR, "queries.jsonl"))
     ap.add_argument("--dense", default="bge-m3", help="модель для плотного поиска и гибрида")
+    ap.add_argument("--model-path", default=None,
+                    help="откуда брать веса вместо пути из model_specs. Нужно "
+                         "дообученной модели до публикации на HuggingFace: "
+                         "задержка меряется по весам, приехавшим с видеокарты, "
+                         "а не по тому, чего ещё нет в сети")
     ap.add_argument("--rerank-model", default="BAAI/bge-reranker-v2-m3")
     ap.add_argument("--only", nargs="*", default=None,
                     help="что мерить: bm25 dense hybrid rerank")
@@ -124,13 +130,20 @@ def main() -> None:
                 lambda k: bm25.search(qtext[k], TOP_REPORT), qids, sample=args.sample)
 
     index = enc = None
+    # Урезанные размерности матрёшки это та же модель с другим полем
+    # truncate_dim, и путь к весам у них общий: подмена пути должна
+    # распространяться на все три записи сразу.
+    spec = MODELS[args.dense]
+    if args.model_path:
+        spec = dataclasses.replace(spec, path=args.model_path)
+        say(f"веса взяты из {args.model_path} вместо {MODELS[args.dense].path}")
     emb = os.path.join(EMBDIR, args.chunks, args.dense)
     have_dense = os.path.exists(os.path.join(emb, "vectors.npy"))
     if (want("dense") or want("hybrid") or want("rerank")) and have_dense:
         from rufin.retrieval.dense import DenseIndex, Encoder
-        index = DenseIndex.from_files(MODELS[args.dense], os.path.join(emb, "vectors.npy"),
+        index = DenseIndex.from_files(spec, os.path.join(emb, "vectors.npy"),
                                       os.path.join(emb, "ids.txt"))
-        enc = Encoder(MODELS[args.dense])
+        enc = Encoder(spec)
         result["index"][f"dense:{args.dense}"] = {"size_mb": round(index.size_mb, 1),
                                                   "dim": int(index.vectors.shape[1]),
                                                   "device": enc.device}

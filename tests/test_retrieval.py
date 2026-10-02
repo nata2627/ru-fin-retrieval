@@ -135,3 +135,40 @@ def test_rrf_не_теряет_документ_из_одной_выдачи():
 def test_rrf_обрезает_по_глубине():
     выдача = [(f"d{i}", 1.0) for i in range(50)]
     assert len(rrf([выдача], top=10)) == 10
+
+
+# ---- обрезка вектора: матрёшка ----
+
+def test_обрезка_вектора_нормирует_заново():
+    """Индекс считает косинус внутренним произведением нормированных
+    векторов. После обрезки длина уже не единица, и без повторной
+    нормировки выдача изменилась бы не из-за обрезки, а из-за длины.
+    Ошибка тихая: метрика просто оказывается ниже."""
+    import numpy as np
+
+    from rufin.retrieval.dense import truncate
+    vec = np.array([[0.6, 0.8, 0.0, 0.0], [0.5, 0.5, 0.5, 0.5]], dtype="float32")
+    срез = truncate(vec, 2)
+    assert срез.shape == (2, 2)
+    assert np.allclose(np.linalg.norm(срез, axis=1), 1.0)
+
+
+def test_обрезка_до_полной_размерности_ничего_не_меняет():
+    import numpy as np
+
+    from rufin.retrieval.dense import truncate
+    vec = np.array([[0.6, 0.8]], dtype="float32")
+    assert np.allclose(truncate(vec, 0), vec)
+    assert np.allclose(truncate(vec, 2), vec)
+    assert np.allclose(truncate(vec, 99), vec)
+
+
+def test_нулевой_срез_не_делится_на_ноль():
+    """У вектора, у которого первые измерения нулевые, нормировать нечего.
+    Деление на ноль дало бы nan, и поиск вернул бы пустоту молча."""
+    import numpy as np
+
+    from rufin.retrieval.dense import truncate
+    vec = np.array([[0.0, 0.0, 1.0]], dtype="float32")
+    срез = truncate(vec, 2)
+    assert not np.isnan(срез).any()

@@ -10,6 +10,12 @@
   multilingual-e5-*     «query: » и «passage: »;
   FRIDA                 «search_query: » и «search_document: »;
   Qwen3-Embedding       запрос оборачивается в инструкцию, документ — без префикса.
+
+Дообученная модель живёт здесь на тех же правах, что и готовые, и это
+не формальность. Оценка обязана идти тем же путём: та же нарезка, те же
+префиксы, тот же код метрик. Отдельная ветка «а эту считаем иначе»
+превратила бы сравнение моделей в сравнение протоколов, и заметить это
+по самим числам было бы нельзя.
 """
 from __future__ import annotations
 
@@ -28,6 +34,7 @@ class ModelSpec:
     passage_prefix: str = ""
     max_seq_length: int = 512
     dim: int = 0
+    truncate_dim: int = 0
     note: str = ""
 
 
@@ -59,8 +66,29 @@ MODELS: dict[str, ModelSpec] = {
         "rosberta", "ai-forever/ru-en-RoSBERTa",
         query_prefix="search_query: ", passage_prefix="search_document: ", dim=1024,
         note="русскоязычная, запасной вариант"),
+    # Дообученный ученик: e5-small после рецепта этапа 3. Префиксы те же,
+    # что у исходной модели, — обучение шло с ними, и поменять их значит
+    # поменять задачу. Размерности 256 и 128 — обрезка вектора, которой
+    # научил этап матрёшки: отдельных весов у них нет, это та же модель
+    # с указанием, сколько измерений брать.
+    "rufin": ModelSpec(
+        "rufin", "nata2627/ru-fin-e5-small",
+        query_prefix="query: ", passage_prefix="passage: ", dim=384,
+        note="дообученная multilingual-e5-small: 118M параметров, 22M обучаемых"),
+    "rufin-256": ModelSpec(
+        "rufin-256", "nata2627/ru-fin-e5-small",
+        query_prefix="query: ", passage_prefix="passage: ", dim=256,
+        truncate_dim=256,
+        note="та же модель, вектор обрезан до 256: индекс меньше в полтора раза"),
+    "rufin-128": ModelSpec(
+        "rufin-128", "nata2627/ru-fin-e5-small",
+        query_prefix="query: ", passage_prefix="passage: ", dim=128,
+        truncate_dim=128,
+        note="та же модель, вектор обрезан до 128: индекс меньше втрое"),
 }
 
 # модели основной таблицы и модель, на которой считаются абляции по нарезке
 HEADLINE = ("bge-m3", "e5-large", "qwen3-0.6b", "user-bge-m3", "frida")
 ABLATION = "e5-small"
+# дообученная модель и её урезанные размерности
+TRAINED = ("rufin", "rufin-256", "rufin-128")

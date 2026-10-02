@@ -108,6 +108,12 @@ def main() -> None:
     ap.add_argument("--phase-b-report", default=os.path.join(RUNDIR, "report_phase_b.json"))
     ap.add_argument("--subsets", default=os.path.join(QDIR, "podvyborki.json"),
                     help="состав подвыборок; считает `make bench`")
+    ap.add_argument("--only", default=None,
+                    help="считать ТОЛЬКО по этой подвыборке, например dev. "
+                         "Нужно на время подбора рецепта обучения: тест "
+                         "трогается один раз, в самом конце, и цель, которая "
+                         "считает по всему размеченному, слишком легко "
+                         "запустить по привычке")
     args = ap.parse_args()
 
     os.makedirs(RESDIR, exist_ok=True)
@@ -123,6 +129,13 @@ def main() -> None:
 
     queries = [json.loads(l) for l in open(args.queries, encoding="utf-8") if l.strip()]
     qrels = read_qrels(qrels_path)
+    subsets: dict[str, list[str]] = {}
+    if os.path.exists(args.subsets):
+        subsets = json.load(open(args.subsets, encoding="utf-8"))
+    if args.only and args.only not in subsets:
+        raise SystemExit(
+            f"нет подвыборки «{args.only}». Есть: {', '.join(subsets) or 'никаких'}.\n"
+            f"Состав подвыборок считает `make bench`.")
     # Метрика считается только по запросам, для которых выдача есть у всех
     # конфигураций: сравнение парное, и разные знаменатели сделали бы его
     # бессмысленным. Размеченные запросы без выдачи — это не ноль качества,
@@ -131,6 +144,12 @@ def main() -> None:
     labelled = {q["query_id"] for q in queries} & set(qrels)
     known = labelled & covered
     без_выдачи = sorted(labelled - covered)
+    if args.only:
+        known &= set(subsets[args.only])
+        без_выдачи = sorted(set(без_выдачи) & set(subsets[args.only]))
+        if not known:
+            raise SystemExit(f"в подвыборке «{args.only}» нет ни одного запроса "
+                             f"с разметкой и выдачей у всех конфигураций")
     origins: dict[str, int] = {}
     for q in queries:
         if q["query_id"] in known:
@@ -143,6 +162,9 @@ def main() -> None:
         report.append(s)
 
     say(f"нарезка: {args.config}")
+    if args.only:
+        say(f"ТОЛЬКО подвыборка «{args.only}»: остальные запросы в метрику "
+            f"не входят вовсе")
     say(f"разметка: {os.path.relpath(qrels_path, ROOT)}")
     say(f"запросов с разметкой и выдачей: {len(known)}  "
         f"({', '.join(f'{k}: {v}' for k, v in sorted(origins.items()))})")
@@ -187,11 +209,8 @@ def main() -> None:
     # Заголовочная цифра считается по живым, ручным и невиданным актам;
     # синтетика печатается отдельной строкой для сопоставимости с прежними
     # прогонами.
-    subsets: dict[str, list[str]] = {}
-    if os.path.exists(args.subsets):
-        subsets = json.load(open(args.subsets, encoding="utf-8"))
     подвыборки: dict[str, dict] = {}
-    if subsets:
+    if subsets and not args.only:
         say()
         say("по подвыборкам (NDCG@10 с интервалом):")
         имена = [n for n in SUBSET_ORDER if n in subsets] + \
@@ -241,18 +260,21 @@ def main() -> None:
             for k, v in rows.items():
                 say(f"   {k:<26} {v}")
 
+    хвост = f"_{args.only}" if args.only else ""
     result = {"config": args.config, "qrels": os.path.relpath(qrels_path, ROOT),
+              "only": args.only,
               "queries": len(known), "origins": origins,
               "podvyborki": подвыборки,
               "metrics": {cfg: {n: M.bootstrap_ci(pq[n]).__dict__ for n in names}
                           for cfg, pq in per_q.items()},
               "index": index_info}
-    with open(os.path.join(RESDIR, f"{args.config}.json"), "w", encoding="utf-8") as f:
+    with open(os.path.join(RESDIR, f"{args.config}{хвост}.json"), "w", encoding="utf-8") as f:
         json.dump(result, f, ensure_ascii=False, indent=1)
-    with open(os.path.join(RAW, f"metrics_{args.config}.txt"), "w", encoding="utf-8") as f:
+    with open(os.path.join(RAW, f"metrics_{args.config}{хвост}.txt"), "w",
+              encoding="utf-8") as f:
         f.write("\n".join(report) + "\n")
-    say(f"\nрезультаты: data/results/{args.config}.json, "
-        f"сырой вывод: docs/raw/metrics_{args.config}.txt")
+    say(f"\nрезультаты: data/results/{args.config}{хвост}.json, "
+        f"сырой вывод: docs/raw/metrics_{args.config}{хвост}.txt")
 
 
 if __name__ == "__main__":

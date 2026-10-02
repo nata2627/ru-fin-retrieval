@@ -59,7 +59,24 @@ class Encoder:
             texts = [prefix + t for t in texts]
         vec = self.model.encode(texts, batch_size=self.batch_size, convert_to_numpy=True,
                                 normalize_embeddings=True, show_progress_bar=show_progress)
-        return vec.astype("float32")
+        return truncate(vec.astype("float32"), self.spec.truncate_dim)
+
+
+def truncate(vectors: np.ndarray, dim: int) -> np.ndarray:
+    """Обрезать вектор до `dim` измерений и нормировать заново.
+
+    Так работает матрёшка: модель обучена так, что первые 128 измерений
+    сами по себе осмысленный вектор. Повторная нормировка обязательна —
+    после обрезки длина уже не единица, а индекс считает косинус
+    внутренним произведением. Без неё выдача изменится не из-за обрезки,
+    а из-за разной длины векторов, и это будет тихо.
+    """
+    if not dim or dim >= vectors.shape[1]:
+        return vectors
+    cut = vectors[:, :dim]
+    norm = np.linalg.norm(cut, axis=1, keepdims=True)
+    norm[norm == 0] = 1.0
+    return (cut / norm).astype("float32")
 
 
 @dataclass

@@ -16,7 +16,7 @@ FROM ?= base
 DENSE ?= bge-m3
 REPO ?= nata2627/ru-fin-retrieval
 
-.PHONY: help test lint probe check-split check-bm25 check-alignment remap length-effect chunking-effect corpus chunks use-chunks explan queries pool kaggle bench metrics latency errors clean-raw split live manual-task manual-apply judge sample-for-human kappa check-bench publish
+.PHONY: help test lint probe check-split check-bm25 check-alignment remap length-effect chunking-effect corpus chunks use-chunks explan queries pool kaggle bench metrics latency errors clean-raw split live manual-task manual-apply judge sample-for-human kappa check-bench publish check-train dev-metrics recipe matryoshka
 
 help:
 	@echo "Проверки (ни данных, ни видеокарты не требуют):"
@@ -51,11 +51,18 @@ help:
 	@echo "  errors       разбор провальных запросов"
 	@echo "  latency      замеры задержки на этой машине (DENSE=$(DENSE))"
 	@echo ""
+	@echo "Дообучение (счёт на Kaggle, проверки и отчёт локально):"
+	@echo "  check-train  проверка обучающих данных: утечка, эталоны, негативы"
+	@echo "  dev-metrics  метрики ТОЛЬКО по dev — на время подбора рецепта"
+	@echo "  recipe       таблица «этап рецепта -> dev» из журнала обучения"
+	@echo "  matryoshka   индексы урезанных размерностей из полной матрицы"
+	@echo ""
 	@echo "На видеокарте Kaggle (см. kaggle/README.md):"
 	@echo "  kaggle       собрать пакет для загрузки (dist/kaggle, ~20 МБ)"
 	@echo "               этап A: синтетические запросы и эмбеддинги"
 	@echo "               этап B: выдачи всех поисковых конфигураций"
 	@echo "               этап C: обучающая выборка, dev, тест, судья"
+	@echo "               этап D: подготовка, рецепт обучения, финал"
 
 # Тесты на собранных данных помечены `data` и пропускаются, если данных нет.
 test:
@@ -169,6 +176,30 @@ publish: check-bench
 
 metrics:
 	$(PY) scripts/metrics_report.py --config $(CHUNKS)
+
+# Обучающие данные проверяются до того, как включена видеокарта: утечка
+# по актам обесценивает dev, а значит и весь подбор рецепта, а съехавший
+# эталон учит модель находить не то. Обе беды по метрикам не видны.
+check-train:
+	$(PY) scripts/check_train_data.py --chunks $(CHUNKS)
+
+# Тест трогается один раз, в самом конце. Пока подбирается рецепт, цель
+# `metrics` опасна: она считает по всему размеченному, то есть и по тесту,
+# и запустить её по привычке ничего не стоит. Эта считает только по dev.
+dev-metrics:
+	$(PY) scripts/metrics_report.py --config $(CHUNKS) --only dev
+
+# Вердикты пересчитываются из поквериных значений тем же кодом, которым
+# их считала видеокарта: расхождение означает, что журнал приехал не тем,
+# чем уехал.
+recipe:
+	$(PY) scripts/recipe_table.py
+
+# Матрёшка не требует второго прогона модели: 256 и 128 получаются из 384
+# срезом с повторной нормировкой. Нужны, чтобы померить задержку и размер
+# индекса по каждой размерности.
+matryoshka:
+	$(PY) scripts/matryoshka_index.py --chunks $(CHUNKS) --from-model $(DENSE)
 
 errors:
 	$(PY) scripts/error_analysis.py --run data/runs/$(CHUNKS)__hybrid-rerank.jsonl \

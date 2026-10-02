@@ -29,6 +29,14 @@ QUERIES = [
     "data/queries/queries.jsonl",
     "data/queries/split.json",
     "data/queries/pool_candidates.tsv",
+    # этап D: обучающая выборка, dev и разметка с составом подвыборок.
+    # Разметка и подвыборки нужны, чтобы dev на видеокарте считался тем же
+    # составом и тем же эталоном, что в локальном отчёте: разойдись они —
+    # и рецепт подбирался бы по одной цифре, а публиковалась бы другая.
+    "data/queries/synthetic_train.jsonl",
+    "data/queries/synthetic_dev.jsonl",
+    "data/queries/qrels.tsv",
+    "data/queries/podvyborki.json",
 ]
 
 # модули проекта, которые нужны на видеокарте
@@ -40,11 +48,25 @@ PACKAGE = [
     "src/rufin/split.py",
     "src/rufin/annotation.py",
     "src/rufin/benchmark.py",
+    # метрики уезжают целиком: dev после каждого этапа обучения считается
+    # тем же кодом, что считает итоговую таблицу на маке. Второй реализации
+    # метрики в проекте быть не должно — сравнивать пришлось бы реализации
+    "src/rufin/metrics.py",
     "src/rufin/retrieval/__init__.py",
     "src/rufin/retrieval/text.py",
     "src/rufin/retrieval/bm25.py",
     "src/rufin/retrieval/hybrid.py",
+    "src/rufin/retrieval/dense.py",
     "src/rufin/retrieval/model_specs.py",
+    # обучение: рецепт, пары, негативы, заморозка, журнал
+    "src/rufin/training/__init__.py",
+    "src/rufin/training/config.py",
+    "src/rufin/training/pairs.py",
+    "src/rufin/training/negatives.py",
+    "src/rufin/training/freeze.py",
+    "src/rufin/training/losses.py",
+    "src/rufin/training/trainer.py",
+    "src/rufin/training/journal.py",
 ]
 
 # скрипты, запускаемые в ноутбуке
@@ -60,6 +82,10 @@ SCRIPTS = [
     "kaggle/gpu_judge.py",
     "kaggle/run_phase_c.py",
     "kaggle/gpu_search.py",
+    "kaggle/gpu_prepare.py",
+    "kaggle/gpu_traineval.py",
+    "kaggle/gpu_forget.py",
+    "kaggle/run_phase_d.py",
     "kaggle/README.md",
 ]
 
@@ -118,6 +144,16 @@ def main() -> None:
     if "split.json" not in взято:
         print("   сплита нет: `python3 scripts/make_split.py`. Генерировать "
               "без сплита нельзя — вопросы попадут на акты теста")
+    for имя, зачем in (("synthetic_train.jsonl", "обучать нечем"),
+                       ("qrels.tsv", "dev после этапа обучения не посчитать"),
+                       ("podvyborki.json", "состав dev придётся угадывать "
+                                           "по приставке идентификатора")):
+        if имя not in взято:
+            print(f"   нет {имя}: {зачем}")
+    print("   каноническую нарезку (chunks_base.jsonl.gz, ~100 МБ) этот пакет "
+          "не несёт: она уехала вместе с выдачами этапа B и уже лежит "
+          "отдельным датасетом. Этап D сверяет её со сплитом и без неё "
+          "отказывается считать")
     print("порядок действий — kaggle/README.md")
 
 
