@@ -42,7 +42,15 @@ import gpu_traineval as E  # noqa: E402
 from rufin import split as SP  # noqa: E402
 from rufin.benchmark import read_qrels  # noqa: E402
 from rufin.training import trainer as T  # noqa: E402
-from rufin.training.config import BY_TAG, RECIPE, STUDENT, TrainConfig, stage_e  # noqa: E402
+from rufin.training.config import (  # noqa: E402
+    BY_TAG,
+    FIXED,
+    STUDENT,
+    C,
+    TrainConfig,
+    stage_d,
+    stage_e,
+)
 from rufin.training.journal import Journal, entry_from_per_query  # noqa: E402
 from rufin.training.negatives import NegativeRules, detect_scale, pick_all  # noqa: E402
 from rufin.training.pairs import (  # noqa: E402
@@ -199,7 +207,7 @@ def шаг_train(env: Окружение, args, journal: Journal) -> None:
                          "этап не с чем сравнивать")
     pairs, негативы, подготовка, scale = env.обучающее(args)
 
-    for cfg in выбрать_этапы(args, journal):
+    for cfg in план(args, journal):
         if journal.by_tag(cfg.tag) and not args.force:
             print(f"\n=== {cfg.tag}: уже в журнале, пропуск ===", flush=True)
             continue
@@ -244,25 +252,46 @@ def шаг_train(env: Окружение, args, journal: Journal) -> None:
     print(f"\nлучшее принятое: {лучшее.tag}, dev NDCG@10 {лучшее.ndcg:.3f}", flush=True)
 
 
-def выбрать_этапы(args, journal: Journal) -> list[TrainConfig]:
-    """Какие этапы считать в этом прогоне.
+def состав_лучшего(journal: Journal) -> TrainConfig:
+    """Конфигурация лучшего принятого этапа — основа для D и E.
 
-    Сетка этапа E строится от состава лучшего принятого этапа, а не от
-    записанного в рецепте по умолчанию: «поверх лучшего» и означает это.
+    Берётся из журнала, а не из рецепта: состав этапа D зависит от того,
+    что оказалось принятым, и заранее это неизвестно. Если не принято
+    ничего, основой служит этап C — он и в рецепте стоит основой
+    по умолчанию.
+    """
+    лучшее = journal.best()
+    if лучшее is not None and лучшее.config:
+        return TrainConfig.from_dict(лучшее.config)
+    return C
+
+
+def по_метке(метка: str, journal: Journal) -> TrainConfig:
+    """Этап по имени. D и E ищутся среди производных от лучшего принятого."""
+    основа = состав_лучшего(journal)
+    производные = {c.tag: c for c in stage_d(основа) + stage_e(основа)}
+    if метка in производные:
+        return производные[метка]
+    if метка in BY_TAG:
+        return BY_TAG[метка]
+    raise SystemExit(f"нет такого этапа: {метка}. Есть: {', '.join(BY_TAG)}")
+
+
+def план(args, journal: Journal):
+    """Этапы по порядку, лениво.
+
+    Генератор, а не список, и это существенно. Состав этапов D и E
+    назначается по лучшему принятому, а кто им окажется, известно только
+    после того, как посчитаны предыдущие. Список пришлось бы составлять
+    до прогона, то есть по вчерашнему журналу.
     """
     if args.tags:
-        известные = []
         for метка in args.tags:
-            if метка in BY_TAG:
-                известные.append(BY_TAG[метка])
-            else:
-                raise SystemExit(f"нет такого этапа: {метка}. Есть: "
-                                 f"{', '.join(BY_TAG)}")
-        return известные
-    этапы = [c for c in RECIPE if c.stage != "E"]
-    лучшее = journal.best()
-    основа = BY_TAG.get(лучшее.tag) if лучшее else None
-    return этапы + list(stage_e(основа) if основа else ())
+            yield по_метке(метка, journal)
+        return
+    yield from FIXED
+    yield from stage_d(состав_лучшего(journal))
+    yield from stage_e(состав_лучшего(journal))
 
 
 def шаг_final(env: Окружение, args, journal: Journal) -> None:
@@ -281,7 +310,11 @@ def шаг_final(env: Окружение, args, journal: Journal) -> None:
     os.makedirs(args.runs, exist_ok=True)
     итоги: dict = {}
     for метка in метки:
-        cfg = BY_TAG.get(метка)
+        # Размерности матрёшки берутся из журнала, а не из рецепта: состав
+        # этапа D зависел от того, что оказалось принятым
+        запись = journal.by_tag(метка)
+        cfg = (TrainConfig.from_dict(запись.config)
+               if запись is not None and запись.config else BY_TAG.get(метка))
         out_dir = os.path.join(args.weights, метка)
         if not os.path.exists(out_dir):
             raise SystemExit(f"нет весов этапа {метка}: {out_dir}")
@@ -297,9 +330,16 @@ def шаг_final(env: Окружение, args, journal: Journal) -> None:
             итоги[имя] = {"dev+тест вместе, NDCG@10": итог[dim]["NDCG@10"],
                           "размер матрицы МБ": итог[dim]["размер матрицы МБ"],
                           "метка": метка, "размерность": dim}
-        # матрица полной размерности уезжает на мак: по ней снимается задержка
-        # и размер индекса, а обрезанные размерности получаются из неё срезом
-        сохранить_матрицу(out_dir, env, args)
+    # Матрица полной размерности уезжает на мак: по ней снимается задержка
+    # и размер индекса, а обрезанные размерности получаются из неё срезом.
+    # Сохраняется она ровно для первой метки — той, которая пойдёт
+    # в публикацию. Складывать матрицы нескольких этапов в одну папку
+    # значило бы получить на маке неизвестно чью.
+    print(f"\n=== матрица эмбеддингов для {метки[0]} ===", flush=True)
+    if len(метки) > 1:
+        print(f"    прочие метки ({', '.join(метки[1:])}) матрицу не сохраняют: "
+              f"на маке по ней меряется задержка публикуемой модели", flush=True)
+    сохранить_матрицу(os.path.join(args.weights, метки[0]), env, args)
     with open(os.path.join(args.runs, "report_phase_d.json"), "w", encoding="utf-8") as f:
         json.dump({"финал": итоги, "правило": "разбивку по подвыборкам считает "
                                               "локальный make metrics"},

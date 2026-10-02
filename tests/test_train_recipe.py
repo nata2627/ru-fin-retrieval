@@ -11,11 +11,14 @@ import pytest
 
 from rufin.training.config import (
     BY_TAG,
+    C_ОБА,
+    FIXED,
     ORDER,
     RECIPE,
     STUDENT,
     C,
     TrainConfig,
+    stage_d,
     stage_e,
 )
 
@@ -60,7 +63,35 @@ def test_длина_входа_одна_и_та_же():
 
 def test_дистилляция_только_там_где_объявлена():
     with_distill = {c.tag for c in RECIPE if "distill" in c.datasets}
-    assert with_distill == {"c-kl", "d-matryoshka"} | {c.tag for c in stage_e(C)}
+    assert with_distill == {"c-kl", "c-oba", "d-matryoshka"} | {c.tag for c in stage_e(C)}
+
+
+def test_контрастив_и_дистилляция_вместе_только_отдельной_строкой():
+    """Библиотека задаёт размер батча один на все наборы обучения, поэтому
+    учить их вместе можно только батчем 16. Для контрастива это не дешевле,
+    а легче: негативами ему служат эталоны остальных вопросов батча, и 16
+    при накоплении 8 — это 16 негативов, а не 128. Значит прирост такого
+    этапа нельзя отнести к дистилляции, и этап выделен в свою строку
+    с пометкой."""
+    оба = [c for c in RECIPE if set(c.datasets) == {"pairs", "distill"}]
+    assert [c.tag for c in оба] == ["c-oba"]
+    assert "батчем 16" in C_ОБА.note
+    assert C.datasets == ("distill",)
+
+
+def test_этапы_D_и_E_строятся_от_состава_а_не_зашиты():
+    """Состав этапа D зависит от того, какой этап оказался принятым,
+    и заранее это неизвестно."""
+    от_оба = stage_d(C_ОБА)[0]
+    assert от_оба.datasets == C_ОБА.datasets
+    assert от_оба.extends == "c-oba"
+    assert от_оба.tag == stage_d(C)[0].tag  # метка одна: строка таблицы одна
+    assert all(c.datasets == C_ОБА.datasets for c in stage_e(C_ОБА))
+
+
+def test_фиксированные_этапы_не_зависят_от_журнала():
+    assert {c.stage for c in FIXED} == {"A", "A+", "B", "C"}
+    assert all(not c.matryoshka for c in FIXED)
 
 
 def test_матрёшка_начинается_с_полной_размерности():
@@ -79,6 +110,16 @@ def test_список_дистилляции_длиннее_двух():
     for c in RECIPE:
         if "distill" in c.datasets:
             assert c.distill_docs >= 3
+
+
+def test_перебор_и_конфигурация_переживают_запись_в_журнал():
+    """Журнал пишется в JSON, а JSON не знает кортежей: после чтения
+    `datasets` и `matryoshka` становятся списками. По ним сравниваются
+    составы этапов, а список и кортеж не равны друг другу."""
+    import json
+    для_D = stage_d(C_ОБА)[0]
+    снова = TrainConfig.from_dict(json.loads(json.dumps(для_D.as_dict())))
+    assert снова == для_D
 
 
 def test_сетка_этапа_E_не_разорит_квоту():

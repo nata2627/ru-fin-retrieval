@@ -179,10 +179,16 @@ def train(cfg: TrainConfig, наборы: dict, out_dir: str, weights: str = "",
         batch_sampler=sampler,
         multi_dataset_batch_sampler=MultiDatasetBatchSamplers.PROPORTIONAL,
     )
-    trainer = SentenceTransformerTrainer(
-        model=model, args=args,
-        train_dataset=наборы if len(наборы) > 1 else next(iter(наборы.values())),
-        loss=losses if len(наборы) > 1 else next(iter(losses.values())))
+    # При двух наборах передаётся DatasetDict, а не обычный словарь: ключи
+    # набора и ключи функций потерь обязаны совпасть, и DatasetDict это
+    # требование выражает, а не подразумевает.
+    if len(наборы) > 1:
+        from datasets import DatasetDict
+        данные, потери = DatasetDict(наборы), losses
+    else:
+        данные, потери = next(iter(наборы.values())), next(iter(losses.values()))
+    trainer = SentenceTransformerTrainer(model=model, args=args,
+                                         train_dataset=данные, loss=потери)
     t0 = time.time()
     result = trainer.train()
     seconds = time.time() - t0
