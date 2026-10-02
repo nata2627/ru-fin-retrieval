@@ -180,7 +180,7 @@ def score_pairs(pairs: list[tuple[str, str]], model_path: str, device: str,
     tok = AutoTokenizer.from_pretrained(model_path)
     kwargs = common.half_kwargs(device)
     model = AutoModelForSequenceClassification.from_pretrained(model_path, **kwargs)
-    model.to(device).eval()
+    model = common.ensure_half(model.to(device), device).eval()
     карт = torch.cuda.device_count() if device == "cuda" else 1
     if карт > 1:
         model = torch.nn.DataParallel(model)

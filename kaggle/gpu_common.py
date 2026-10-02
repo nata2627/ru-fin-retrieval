@@ -195,19 +195,47 @@ def resolve_model(hf_id: str, root: str = "/kaggle/input") -> str:
 def half_kwargs(device: str) -> dict:
     """Параметры половинной точности.
 
-    Имя параметра у transformers менялось: раньше `torch_dtype`, теперь `dtype`.
-    Версия на Kaggle заранее не известна, поэтому подходящее подбирается пробой,
-    а не угадывается.
+    Имя параметра у transformers менялось: было `torch_dtype`, стало `dtype`,
+    и в пятой версии старое имя не действует вовсе.
+
+    **Разбором подписи это определить нельзя, и прежняя попытка была
+    бесполезной.** У `AutoModel.from_pretrained` в подписи стоит только
+    `*model_args, **kwargs`, поэтому проверка «есть ли среди параметров
+    dtype» всегда отвечала «нет» и всегда выбирала старое имя. На старых
+    версиях это работало по совпадению. На пятой — перестало, и перестало
+    молча: модель грузится в fp32, ошибки нет, а счёт идёт втрое дольше.
+
+    Поэтому имя выбирается по версии библиотеки, а результат ещё и
+    проверяется на самой модели (`ensure_half`): предполагать здесь нечего,
+    цена ошибки — часы.
     """
     if device == "cpu":
         return {}
-    import inspect
-
     import torch
-    from transformers import AutoModel
-    name = "dtype" if "dtype" in inspect.signature(
-        AutoModel.from_pretrained).parameters else "torch_dtype"
-    return {name: torch.float16}
+    import transformers
+    старшая = int(transformers.__version__.split(".")[0])
+    return {("dtype" if старшая >= 5 else "torch_dtype"): torch.float16}
+
+
+def ensure_half(model, device: str):
+    """Убедиться, что модель действительно в половинной точности.
+
+    Проверка на самой модели, а не на намерении: параметр мог быть
+    проигнорирован, переименован или просто не доехать. На T4 разница
+    между fp16 и fp32 — втрое по времени, и узнавать о ней по длительности
+    прогона слишком дорого.
+    """
+    if device == "cpu":
+        return model
+    import torch
+    было = next(model.parameters()).dtype
+    if было is torch.float32:
+        print(f"   точность приехала {было}, перевожу в float16: "
+              f"на T4 это втрое по времени", flush=True)
+        model = model.half()
+    else:
+        print(f"   точность: {было}", flush=True)
+    return model
 
 
 def load_encoder(path: str, device: str, max_seq_length: int = 512):
