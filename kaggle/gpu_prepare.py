@@ -279,15 +279,44 @@ def candidates_for(queries: list[dict], chunks: list[dict], depth: int,
           flush=True)
 
     spec = MODELS[SPEC]
-    model = common.load_encoder(student, device, spec.max_seq_length)
+    # Загрузка под будильником. Зависание — не ошибка, его не ловит ни один
+    # `try`: сессия просто стоит, пока не кончится время. Один прогон уже
+    # простоял так двенадцать часов и не оставил ничего.
+    import gpu_search as S
     t0 = time.time()
-    corpus = model.encode([spec.passage_prefix + t for t in texts],
-                          batch_size=batch_size, convert_to_numpy=True,
-                          normalize_embeddings=True, show_progress_bar=True)
-    qvec = model.encode([spec.query_prefix + q["text"] for q in queries],
-                        batch_size=batch_size, convert_to_numpy=True,
-                        normalize_embeddings=True, show_progress_bar=False)
-    print(f"   эмбеддинги необученного ученика за {time.time() - t0:.0f} с", flush=True)
+    with S.time_limit(S.MODEL_TIMEOUT):
+        model = common.load_encoder(student, device, spec.max_seq_length)
+    print(f"   ученик загружен за {time.time() - t0:.0f} с", flush=True)
+
+    def закодировать(энкодер, что: list[str], имя: str, блок: int = 4096) -> np.ndarray:
+        """Кодирование блоками, с отчётом после каждого.
+
+        Один вызов на сорок тысяч текстов — это полчаса молчания,
+        неотличимого от зависания. Блоками видно скорость с первой минуты,
+        и прогон, который встал, виден сразу.
+
+        Полоса прогресса выключена нарочно: в журнале Kaggle она
+        разворачивается в сотни тысяч строк и сама становится обузой.
+        """
+        куски = []
+        t = time.time()
+        for начало in range(0, len(что), блок):
+            кусок = что[начало:начало + блок]
+            куски.append(энкодер.encode(кусок, batch_size=batch_size,
+                                      convert_to_numpy=True,
+                                      normalize_embeddings=True,
+                                      show_progress_bar=False))
+            сделано = начало + len(кусок)
+            прошло = time.time() - t
+            print(f"   {имя}: {сделано}/{len(что)}, {сделано / прошло:.0f} текст/с, "
+                  f"осталось ~{(len(что) - сделано) / max(сделано / прошло, 1e-6) / 60:.0f} мин",
+                  flush=True)
+        return np.vstack(куски) if len(куски) > 1 else куски[0]
+
+    corpus = закодировать(model, [spec.passage_prefix + t for t in texts],
+                          "фрагменты")
+    qvec = закодировать(model, [spec.query_prefix + q["text"] for q in queries],
+                        "вопросы")
     del model
 
     import torch
