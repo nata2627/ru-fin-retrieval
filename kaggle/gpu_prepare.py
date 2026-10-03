@@ -94,6 +94,13 @@ def probe_speed(model_path: str, chunks: list[dict], device: str,
             "пар в секунду": round(скорость, 1)}
 
 
+# Замер идёт на объёме, сравнимом с рабочей пачкой, а не на коротком куске.
+# На пятистах парах скорость выходит выше настоящей: загрузка модели
+# и прогрев размазываются по слишком малому числу пар, и предел по часам
+# пропускает прогон, который в него не укладывается.
+ЗАМЕР_ПО_УМОЛЧАНИЮ = 2048
+
+
 def check_arch(model_path: str, ожидания: dict, кто: str) -> dict:
     """Сверить устройство модели с ожидаемым и напечатать его в отчёт.
 
@@ -209,7 +216,15 @@ def score_pairs(pairs: list[tuple[str, str]], model_path: str, device: str,
     import torch
     from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
-    tok = AutoTokenizer.from_pretrained(model_path)
+    tok = AutoTokenizer.from_pretrained(model_path, use_fast=True)
+    # Быстрый токенизатор — не мелочь. Медленный разбирает текст на питоне,
+    # и на сотнях тысяч длинных пар он, а не видеокарта, становится узким
+    # местом: карта при этом простаивает, а по длительности прогона
+    # не отличить одно от другого. Зеркало модели может не содержать
+    # tokenizer.json, и тогда разбор молча откатывается на медленный.
+    if not getattr(tok, "is_fast", False):
+        print("   ВНИМАНИЕ: токенизатор медленный (питоновский). На длинных "
+              "парах он будет узким местом, а не видеокарта", flush=True)
     kwargs = common.half_kwargs(device)
     model = AutoModelForSequenceClassification.from_pretrained(model_path, **kwargs)
     model = common.ensure_half(model.to(device), device).eval()
@@ -217,14 +232,20 @@ def score_pairs(pairs: list[tuple[str, str]], model_path: str, device: str,
     порядок = sorted(range(len(pairs)), key=lambda i: len(pairs[i][1]))
     out = np.zeros(len(pairs), dtype="float32")
     t0 = time.time()
+    # Время делится на разбор текста и счёт. Без этого деления «медленно»
+    # не отличить от «не на той точности» и от «карта простаивает»:
+    # все три выглядят одинаково — как долгий прогон.
+    на_разбор = 0.0
     # no_grad, а не inference_mode: режим вывода создаёт тензоры, которые
     # не везде принимаются, а выигрыш на этой задаче незаметен.
     with torch.no_grad():
         for start in range(0, len(порядок), batch_size):
             кусок = порядок[start:start + batch_size]
+            t_tok = time.time()
             batch = tok([pairs[i][0] for i in кусок], [pairs[i][1] for i in кусок],
                         padding=True, truncation=True, max_length=max_length,
                         return_tensors="pt").to(device)
+            на_разбор += time.time() - t_tok
             logits = model(**batch).logits.view(-1).float().cpu().numpy()
             out[кусок] = logits
             # Печатаем часто и с первой партии: прогон, который молчит,
@@ -238,7 +259,10 @@ def score_pairs(pairs: list[tuple[str, str]], model_path: str, device: str,
     del model
     if device == "cuda":
         torch.cuda.empty_cache()
-    print(f"   учитель: {len(порядок)} пар за {(time.time() - t0) / 60:.1f} мин", flush=True)
+    всего = time.time() - t0
+    print(f"   учитель: {len(порядок)} пар за {всего / 60:.1f} мин "
+          f"({len(порядок) / всего:.1f} пар/с), из них на разбор текста "
+          f"{на_разбор / 60:.1f} мин ({100 * на_разбор / всего:.0f}%)", flush=True)
     return out
 
 
@@ -307,7 +331,7 @@ def main() -> None:
                          "входом модель находится сама")
     ap.add_argument("--student", default=STUDENT,
                     help="ученик: им считается плотная часть гибридной выдачи")
-    ap.add_argument("--probe", type=int, default=512,
+    ap.add_argument("--probe", type=int, default=ЗАМЕР_ПО_УМОЛЧАНИЮ,
                     help="на скольких парах мерить скорость учителя перед "
                          "прогоном; 0 — не мерить. Объём назначается "
                          "по замеру, а не по арифметике: она здесь "
