@@ -69,7 +69,7 @@ from rufin.training.negatives import NegativeRules, detect_scale, pick_all  # no
 from rufin.training.pairs import assert_only_train_acts, read_jsonl, train_acts  # noqa: E402
 
 
-def probe_speed(model_path: str, chunks: list[dict], device: str,
+def probe_speed(tok, model, chunks: list[dict], device: str,
                 sample: int = 512, batch_size: int = 64) -> dict:
     """Замер скорости учителя до того, как потрачены часы.
 
@@ -87,7 +87,7 @@ def probe_speed(model_path: str, chunks: list[dict], device: str,
     пары = [("Какие требования установлены к порядку расчёта резерва?", t)
             for t in тексты]
     t0 = time.time()
-    score_pairs(пары, model_path, device, batch_size=batch_size)
+    score_pairs(пары, tok, model, device, batch_size=batch_size)
     секунд = time.time() - t0
     скорость = len(пары) / секунд
     return {"пар": len(пары), "секунд": round(секунд, 1),
@@ -125,7 +125,7 @@ def check_arch(model_path: str, ожидания: dict, кто: str) -> dict:
     return свойства
 
 
-def verify_teacher(model_path: str, chunks: list[dict], device: str,
+def verify_teacher(tok, model, chunks: list[dict], device: str,
                    сколько: int = 20, batch_size: int = 64) -> dict:
     """Тот ли это учитель, которым измерено 0,690.
 
@@ -168,7 +168,7 @@ def verify_teacher(model_path: str, chunks: list[dict], device: str,
             пары.append((тексты_запросов[qid], тексты[chunk_id]))
             адрес.append((qid, chunk_id))
     print(f"сверка учителя: {len(общие)} запросов, {len(пары)} пар", flush=True)
-    оценки = score_pairs(пары, model_path, device, batch_size=batch_size)
+    оценки = score_pairs(пары, tok, model, device, batch_size=batch_size)
 
     по_вопросу: dict[str, dict[str, float]] = {}
     for (qid, chunk_id), оценка in zip(адрес, оценки):
@@ -196,24 +196,16 @@ def verify_teacher(model_path: str, chunks: list[dict], device: str,
     return итог
 
 
-def score_pairs(pairs: list[tuple[str, str]], model_path: str, device: str,
-                batch_size: int = 64, max_length: int = 512) -> np.ndarray:
-    """Логиты кросс-энкодера по парам «вопрос, фрагмент».
+def load_teacher(model_path: str, device: str):
+    """Поднять учителя один раз на весь прогон.
 
-    Пары сортируются по длине внутри прогона и возвращаются в исходном
-    порядке: при выравнивании по самой длинной паре батча это заметная
-    разница во времени, а на результат не влияет вовсе.
-
-    **Считается на одной карте, и это решение, а не недосмотр.** Попытка
-    раздать работу по двум через `DataParallel` кончилась тем, что прогон
-    встал на первой же партии: тысяча пар не досчиталась за двенадцать
-    часов, при том что первая партия даже не напечатала строку о себе.
-    Раздача по картам на этом узле либо упирается в обмен между ними,
-    либо не уживается с режимом вывода, и разбираться в этом дороже, чем
-    двукратное ускорение. Одна карта предсказуема, а сколько она стоит,
-    говорит замер перед прогоном.
+    Отдельно от счёта по двум причинам, и обе стоили времени. Веса весят
+    2,3 ГБ, и загрузка их на каждую пачку — это минуты, помноженные
+    на число пачек. А ещё загрузка попадала внутрь замера скорости
+    и занижала её вчетверо: замер показывал 12 пар в секунду там, где
+    счёт идёт на 52, и прогон отказывался начинаться из-за собственной
+    накладной.
     """
-    import torch
     from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
     tok = AutoTokenizer.from_pretrained(model_path, use_fast=True)
@@ -225,9 +217,29 @@ def score_pairs(pairs: list[tuple[str, str]], model_path: str, device: str,
     if not getattr(tok, "is_fast", False):
         print("   ВНИМАНИЕ: токенизатор медленный (питоновский). На длинных "
               "парах он будет узким местом, а не видеокарта", flush=True)
-    kwargs = common.half_kwargs(device)
-    model = AutoModelForSequenceClassification.from_pretrained(model_path, **kwargs)
+    t0 = time.time()
+    model = AutoModelForSequenceClassification.from_pretrained(
+        model_path, **common.half_kwargs(device))
     model = common.ensure_half(model.to(device), device).eval()
+    print(f"   учитель загружен за {time.time() - t0:.0f} с "
+          f"(быстрый токенизатор: {getattr(tok, 'is_fast', False)})", flush=True)
+    return tok, model
+
+
+def score_pairs(pairs: list[tuple[str, str]], tok, model, device: str,
+                batch_size: int = 64, max_length: int = 512) -> np.ndarray:
+    """Логиты кросс-энкодера по парам «вопрос, фрагмент».
+
+    Пары сортируются по длине внутри прогона и возвращаются в исходном
+    порядке: при выравнивании по самой длинной паре батча это заметная
+    разница во времени, а на результат не влияет вовсе.
+
+    **Считается на одной карте, и это решение, а не недосмотр.** Попытка
+    раздать работу по двум через `DataParallel` кончилась тем, что прогон
+    встал на первой же партии. Одна карта предсказуема, а сколько она
+    стоит, говорит замер перед прогоном.
+    """
+    import torch
 
     порядок = sorted(range(len(pairs)), key=lambda i: len(pairs[i][1]))
     out = np.zeros(len(pairs), dtype="float32")
@@ -256,9 +268,6 @@ def score_pairs(pairs: list[tuple[str, str]], model_path: str, device: str,
                 осталось = (len(порядок) - сделано) / max(скорость, 1e-6) / 60
                 print(f"   учитель: {сделано}/{len(порядок)} пар, "
                       f"{скорость:.0f} пар/с, осталось ~{осталось:.0f} мин", flush=True)
-    del model
-    if device == "cuda":
-        torch.cuda.empty_cache()
     всего = time.time() - t0
     print(f"   учитель: {len(порядок)} пар за {всего / 60:.1f} мин "
           f"({len(порядок) / всего:.1f} пар/с), из них на разбор текста "
@@ -454,11 +463,15 @@ def main() -> None:
         print("считать нечего: все вопросы уже посчитаны", flush=True)
     assert_only_train_acts([q["gold_chunk_id"] for q in queries], split, "эталоны обучения")
 
-    # Замер скорости — первым делом. Минута, которая говорит, во что
-    # обойдётся весь прогон, и даёт отказаться до того, как часы потрачены.
+    # Учитель поднимается один раз на весь прогон: веса 2,3 ГБ, и загрузка
+    # их на каждую пачку — минуты, помноженные на число пачек.
+    tok, учитель = load_teacher(teacher, device)
+
+    # Замер скорости — минута, которая говорит, во что обойдётся весь
+    # прогон, и даёт отказаться до того, как часы потрачены.
     замер = {"замер": "выключен"}
     if args.probe:
-        замер = probe_speed(teacher, обучающие, device, sample=args.probe,
+        замер = probe_speed(tok, учитель, обучающие, device, sample=args.probe,
                             batch_size=args.batch_size)
         всего_пар = len(queries) * args.depth
         часов = всего_пар / замер["пар в секунду"] / 3600
@@ -475,7 +488,7 @@ def main() -> None:
     # Сверка учителя — до дорогой части. Тридцать секунд против полутора
     # часов, потраченных на оценки чужой модели.
     сверка = ({"сверка": "выключена"} if not args.verify_teacher
-              else verify_teacher(teacher, chunks, device,
+              else verify_teacher(tok, учитель, chunks, device,
                                   сколько=args.verify_teacher,
                                   batch_size=args.batch_size))
 
@@ -522,7 +535,7 @@ def main() -> None:
                 адрес.append((q["query_id"], chunk_id))
         print(f"\nпачка {н} из {всего_пачек}: вопросов {len(пачка)}, "
               f"пар {len(пары)}", flush=True)
-        оценки = score_pairs(пары, teacher, device, batch_size=args.batch_size)
+        оценки = score_pairs(пары, tok, учитель, device, batch_size=args.batch_size)
         все_оценки += оценки.tolist()
         записи += записать(пачка, адрес, оценки)
         прошло = time.time() - t0
