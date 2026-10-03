@@ -190,14 +190,14 @@ def score_pairs(pairs: list[tuple[str, str]], model_path: str, device: str,
     порядке: при выравнивании по самой длинной паре батча это заметная
     разница во времени, а на результат не влияет вовсе.
 
-    **Считается на всех картах узла, а не на первой.** Узел `GPU T4 ×2`
-    даёт две карты, и квота идёт за обе; код с `device="cuda"` работает
-    на первой, а вторая простаивает. На этапе A проект потерял так 2,5 часа
-    недельной квоты. Здесь работа делится по парам, между примерами связи
-    нет вовсе, поэтому `DataParallel` даёт почти двукратное ускорение
-    без всяких оговорок. Батч умножается на число карт: иначе каждой
-    достанется по половине прежнего, и выигрыш съест накладной расход
-    на раздачу.
+    **Считается на одной карте, и это решение, а не недосмотр.** Попытка
+    раздать работу по двум через `DataParallel` кончилась тем, что прогон
+    встал на первой же партии: тысяча пар не досчиталась за двенадцать
+    часов, при том что первая партия даже не напечатала строку о себе.
+    Раздача по картам на этом узле либо упирается в обмен между ними,
+    либо не уживается с режимом вывода, и разбираться в этом дороже, чем
+    двукратное ускорение. Одна карта предсказуема, а сколько она стоит,
+    говорит замер перед прогоном.
     """
     import torch
     from transformers import AutoModelForSequenceClassification, AutoTokenizer
@@ -206,16 +206,13 @@ def score_pairs(pairs: list[tuple[str, str]], model_path: str, device: str,
     kwargs = common.half_kwargs(device)
     model = AutoModelForSequenceClassification.from_pretrained(model_path, **kwargs)
     model = common.ensure_half(model.to(device), device).eval()
-    карт = torch.cuda.device_count() if device == "cuda" else 1
-    if карт > 1:
-        model = torch.nn.DataParallel(model)
-        batch_size *= карт
-        print(f"   карт {карт}, считаем на всех; батч {batch_size}", flush=True)
 
     порядок = sorted(range(len(pairs)), key=lambda i: len(pairs[i][1]))
     out = np.zeros(len(pairs), dtype="float32")
     t0 = time.time()
-    with torch.inference_mode():
+    # no_grad, а не inference_mode: режим вывода создаёт тензоры, которые
+    # не везде принимаются, а выигрыш на этой задаче незаметен.
+    with torch.no_grad():
         for start in range(0, len(порядок), batch_size):
             кусок = порядок[start:start + batch_size]
             batch = tok([pairs[i][0] for i in кусок], [pairs[i][1] for i in кусок],
@@ -223,7 +220,9 @@ def score_pairs(pairs: list[tuple[str, str]], model_path: str, device: str,
                         return_tensors="pt").to(device)
             logits = model(**batch).logits.view(-1).float().cpu().numpy()
             out[кусок] = logits
-            if (start // batch_size) % 100 == 0:
+            # Печатаем часто и с первой партии: прогон, который молчит,
+            # невозможно отличить от прогона, который встал.
+            if (start // batch_size) % 20 == 0:
                 сделано = start + len(кусок)
                 скорость = сделано / max(time.time() - t0, 1e-6)
                 осталось = (len(порядок) - сделано) / max(скорость, 1e-6) / 60
