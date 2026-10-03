@@ -27,7 +27,14 @@
 Поэтому шкала не угадывается, а задаётся: логиты. Для страховки
 записанное всё равно проверяется по разбросу, и шкала пишется в файл.
 
-**4. Учитель сверяется с тем, которым измерено 0,690.** Веса берутся
+**4. Результат пишется по частям и переживает обрыв.** Сессия на Kaggle
+ограничена по времени, логи на ходу не отдаются, и прогон на несколько
+часов — это несколько часов вслепую. Поэтому вопросы считаются пачками,
+и после каждой готовое дописывается в файл. Убитый на середине прогон
+оставляет посчитанное, а следующий начинает с того места, где
+остановился предыдущий: уже посчитанные вопросы он просто пропускает.
+
+**5. Учитель сверяется с тем, которым измерено 0,690.** Веса берутся
 из модели, подключённой входом Kaggle, а не качаются с HuggingFace:
 секреты через API не прицепить, а без токена скачивание режется
 по скорости. Но зеркало — это чужая копия, и подменённые или просто
@@ -316,6 +323,10 @@ def main() -> None:
                     help="сколько кандидатов на вопрос. Цена прогона линейна "
                          "по глубине: 30 даёт 183 тысячи проходов учителя")
     ap.add_argument("--batch-size", type=int, default=64)
+    ap.add_argument("--shard", type=int, default=250,
+                    help="сколько вопросов считать между записями на диск. "
+                         "Пачка поменьше — чаще отчёт и меньше потерь "
+                         "при обрыве, побольше — меньше накладных")
     ap.add_argument("--limit", type=int, default=0, help="для пробы")
     ap.add_argument("--per-query", type=int, default=2,
                     help="сколько негативов на вопрос нужно этапу B")
@@ -335,10 +346,15 @@ def main() -> None:
     os.makedirs(args.out, exist_ok=True)
     out_path = os.path.join(args.out, "train_prepared.jsonl")
     report_path = os.path.join(args.out, "report_prepare.json")
-    if os.path.exists(out_path) and not args.limit:
-        print(f"готово раньше: {out_path}. Пересчитывать незачем — удалите файл, "
-              f"если нужен новый прогон", flush=True)
-        return
+    # Уже посчитанное не пересчитывается, и это не оптимизация, а условие
+    # работы: сессия ограничена по времени, а прогон идёт часами. Прежний
+    # файл дочитывается, его вопросы выбрасываются из очереди, новые
+    # дописываются в хвост.
+    список_готовых: list[dict] = []
+    if os.path.exists(out_path):
+        список_готовых = read_jsonl(out_path)
+        print(f"найдено посчитанное раньше: {len(список_готовых)} вопросов "
+              f"в {out_path}", flush=True)
 
     # Устройство моделей сверяется до всякого счёта: зеркало это чужая
     # копия, и подменённые веса ничем себя не выдадут.
@@ -372,10 +388,17 @@ def main() -> None:
     if train_path is None:
         raise SystemExit("не найден synthetic_train.jsonl: подключите датасет "
                          "с набором запросов")
-    queries = read_jsonl(train_path)
+    все_вопросы = read_jsonl(train_path)
     if args.limit:
-        queries = queries[:args.limit]
-    print(f"обучающих вопросов {len(queries)}: {train_path}", flush=True)
+        все_вопросы = все_вопросы[:args.limit]
+    готово = {r["query_id"] for r in список_готовых}
+    queries = [q for q in все_вопросы if q["query_id"] not in готово]
+    print(f"обучающих вопросов {len(все_вопросы)}: {train_path}", flush=True)
+    if готово:
+        print(f"   из них посчитано раньше {len(готово)}, осталось {len(queries)}",
+              flush=True)
+    if not queries:
+        print("считать нечего: все вопросы уже посчитаны", flush=True)
     assert_only_train_acts([q["gold_chunk_id"] for q in queries], split, "эталоны обучения")
 
     # Замер скорости — первым делом. Минута, которая говорит, во что
@@ -407,37 +430,55 @@ def main() -> None:
           f"{len(queries) * args.depth}", flush=True)
 
     t0 = time.time()
-    кандидаты = candidates_for(queries, обучающие, args.depth, device,
-                               student=student)
+    кандидаты = (candidates_for(queries, обучающие, args.depth, device,
+                                student=student) if queries else {})
     секунд_выдача = time.time() - t0
 
     тексты = {c["chunk_id"]: c["text"] for c in обучающие}
-    пары: list[tuple[str, str]] = []
-    адрес: list[tuple[str, str]] = []
-    for q in queries:
-        for chunk_id in кандидаты[q["query_id"]]:
-            пары.append((q["text"], тексты[chunk_id]))
-            адрес.append((q["query_id"], chunk_id))
-    оценки = score_pairs(пары, teacher, device, batch_size=args.batch_size)
 
-    по_вопросу: dict[str, dict[str, float]] = {}
-    for (qid, chunk_id), score in zip(адрес, оценки):
-        по_вопросу.setdefault(qid, {})[chunk_id] = float(score)
+    # Пачками, с дописыванием после каждой. Прогон на несколько часов идёт
+    # вслепую — логи Kaggle отдаёт только по завершении, — и единственное,
+    # что отличает убитый прогон от бесполезного, это записанное на диск.
+    def записать(пачка: list[dict], адрес: list, оценки) -> list[dict]:
+        по_вопросу: dict[str, dict[str, float]] = {}
+        for (qid, chunk_id), score in zip(адрес, оценки):
+            по_вопросу.setdefault(qid, {})[chunk_id] = float(score)
+        вышло = []
+        with open(out_path, "a", encoding="utf-8") as f:
+            for q in пачка:
+                свои = по_вопросу[q["query_id"]]
+                gold = q["gold_chunk_id"]
+                упорядочено = sorted(свои.items(), key=lambda kv: -kv[1])
+                rec = {"query_id": q["query_id"], "gold_chunk_id": gold,
+                       "gold_score": свои[gold],
+                       "teacher_place": [c for c, _ in упорядочено].index(gold) + 1,
+                       "candidates": [[c, s] for c, s in упорядочено]}
+                вышло.append(rec)
+                f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+        return вышло
 
-    scale = detect_scale(оценки.tolist())
-    записи = []
-    with open(out_path, "w", encoding="utf-8") as f:
-        for q in queries:
-            свои = по_вопросу[q["query_id"]]
-            gold = q["gold_chunk_id"]
-            упорядочено = sorted(свои.items(), key=lambda kv: -kv[1])
-            rec = {"query_id": q["query_id"], "gold_chunk_id": gold,
-                   "gold_score": свои[gold],
-                   "teacher_place": [c for c, _ in упорядочено].index(gold) + 1,
-                   "candidates": [[c, s] for c, s in упорядочено]}
-            записи.append(rec)
-            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+    записи: list[dict] = список_готовых
+    все_оценки: list[float] = []
+    всего_пачек = (len(queries) + args.shard - 1) // args.shard
+    for н, начало in enumerate(range(0, len(queries), args.shard), start=1):
+        пачка = queries[начало:начало + args.shard]
+        пары, адрес = [], []
+        for q in пачка:
+            for chunk_id in кандидаты[q["query_id"]]:
+                пары.append((q["text"], тексты[chunk_id]))
+                адрес.append((q["query_id"], chunk_id))
+        print(f"\nпачка {н} из {всего_пачек}: вопросов {len(пачка)}, "
+              f"пар {len(пары)}", flush=True)
+        оценки = score_pairs(пары, teacher, device, batch_size=args.batch_size)
+        все_оценки += оценки.tolist()
+        записи += записать(пачка, адрес, оценки)
+        прошло = time.time() - t0
+        осталось = прошло / н * (всего_пачек - н)
+        print(f"   записано всего {len(записи)} вопросов, прошло "
+              f"{прошло / 60:.0f} мин, осталось ~{осталось / 60:.0f} мин",
+              flush=True)
 
+    scale = detect_scale(все_оценки or [r["gold_score"] for r in записи])
     правила = NegativeRules(per_query=args.per_query, train_acts=разрешено)
     _, stats = pick_all(записи, правила, scale)
     места = sorted(r["teacher_place"] for r in записи)
@@ -452,7 +493,8 @@ def main() -> None:
         "замер скорости": замер,
         "шкала оценок": scale,
         "глубина": args.depth,
-        "вопросов": len(queries),
+        "вопросов": len(записи),
+        "посчитано в этом прогоне": len(queries),
         "обучающих фрагментов": len(обучающие),
         "обучающих актов": len(разрешено),
         "проходов учителя": len(пары),
