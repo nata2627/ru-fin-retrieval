@@ -299,6 +299,10 @@ def main() -> None:
     p.add_argument("--notebook", default=None,
                    help="запустить готовую тетрадь из notebooks/ вместо собранной "
                         "из скрипта этапа")
+    p.add_argument("--kernels", nargs="*", default=None,
+                   help="вывод каких ядер подключить входом, помимо обычного. "
+                        "Нужно продолжению рецепта: журнал прежнего прогона "
+                        "лежит в выводе предыдущего ядра")
     p.add_argument("--no-gpu", action="store_true",
                    help="считать без видеокарты: квота GPU не тратится, а ядер "
                         "процессора сессии достаётся больше")
@@ -406,6 +410,9 @@ def main() -> None:
         # выдачи, учитель — оценки. Остальным этапам модели входом не нужны,
         # у них свои источники весов.
         models = list(MODELS.values()) if args.stage in ("d0", "d") else []
+        if args.kernels:
+            kernels = list(kernels) + [k if "/" in k else f"{user}/{k}"
+                                       for k in args.kernels]
         ref = push_kernel(user, slug, title, script, args.args, datasets, kernels,
                           gpu, args.machine, args.notebook or "", models)
         if not args.no_wait:
