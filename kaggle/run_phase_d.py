@@ -115,15 +115,28 @@ class Окружение:
         if self.device != "cuda":
             print("ВНИМАНИЕ: видеокарта не подключена. "
                   "Settings -> Accelerator -> GPU T4", flush=True)
+        self.queries = read_jsonl(найти("queries.jsonl", args.queries))
+        self.qrels = read_qrels(найти("qrels.tsv", args.qrels))
+
         ruler = common.make_ruler()
         acts = common.load_acts(args.acts)
         self.chunks = common.build_chunks_cached(acts, "base", ruler, args.chunks_cache)
         self.split = SP.load(найти("split.json", args.split))
         сверить_нарезку(self.chunks, self.split, args.chunks_cache)
+        if args.limit_chunks:
+            # Корпус урезается только для пробы пути. Метрика по урезанному
+            # корпусу выше настоящей просто потому, что искать не из чего:
+            # сравнивать её с чем бы то ни было нельзя, и журнал у такого
+            # прогона обязан быть отдельный.
+            нужные = {c for ids in self.qrels.values() for c in ids} \
+                if hasattr(self, "qrels") else set()
+            оставить = [c for c in self.chunks if c["chunk_id"] in нужные]
+            прочие = [c for c in self.chunks if c["chunk_id"] not in нужные]
+            self.chunks = (оставить + прочие)[:max(args.limit_chunks, len(оставить))]
+            print(f"ПРОБА: корпус урезан до {len(self.chunks)} фрагментов. "
+                  f"Цифры такого прогона ничего не значат", flush=True)
         self.texts = {c["chunk_id"]: c["text"] for c in self.chunks}
 
-        self.queries = read_jsonl(найти("queries.jsonl", args.queries))
-        self.qrels = read_qrels(найти("qrels.tsv", args.qrels))
         subsets = None
         путь = args.subsets or common.find_file("podvyborki.json")
         if путь:
@@ -455,6 +468,10 @@ def main() -> None:
     ap.add_argument("--batch-size", type=int, default=128,
                     help="размер батча при подсчёте эмбеддингов, не при обучении")
     ap.add_argument("--per-query", type=int, default=2)
+    ap.add_argument("--limit-chunks", type=int, default=0,
+                    help="урезать корпус для оценки. Только для пробы пути: "
+                         "метрика по урезанному корпусу ничего не значит, "
+                         "и журнал такому прогону нужен отдельный")
     ap.add_argument("--limit-train", type=int, default=0,
                     help="урезать обучающую выборку. Только для пробы: журнал "
                          "и папку весов при этом задавайте отдельные, иначе "
