@@ -353,6 +353,16 @@ def main() -> None:
             src = os.path.join(ROOT, "data", "runs", name)
             if os.path.exists(src):
                 shutil.copy2(src, folder)
+        # Журнал прежнего прогона и подготовка едут датасетом, а не входом
+        # от ядра. Kaggle не отдаёт вывод упавшего ядра как источник, и
+        # продолжение рецепта на этом спотыкается ровно тогда, когда оно
+        # нужнее всего — после падения.
+        for rel in ("docs/raw/journal.json", "data/queries/train_prepared.jsonl"):
+            src = os.path.join(ROOT, rel)
+            if os.path.exists(src):
+                shutil.copy2(src, folder)
+                print(f"  в датасет: {os.path.basename(rel)}")
+
         chunks = os.path.join(ROOT, "data", "chunks", "base.jsonl")
         if os.path.exists(chunks):
             import gzip
