@@ -183,7 +183,15 @@ class Окружение:
             raise SystemExit("часть эталонов обучающей выборки отсутствует "
                              "в нарезке: нарезка разошлась с генерацией")
 
-        prepared_path = найти("train_prepared.jsonl", args.prepared)
+        # Подготовки может не быть, и это законный случай. Этап A учится
+        # на одних парах, негативы ему не нужны вовсе, и пробу пути можно
+        # пройти до того, как подготовка досчиталась. Этапы, которым
+        # негативы нужны, откажутся собирать набор и скажут почему.
+        prepared_path = args.prepared or common.find_file("train_prepared.jsonl")
+        if prepared_path is None:
+            print("подготовки нет: этап A посчитается, этапам с негативами "
+                  "и дистилляцией собирать набор будет не из чего", flush=True)
+            return pairs, {}, {}, "logit"
         подготовка = read_jsonl(prepared_path)
         по_id = {r["query_id"]: r for r in подготовка}
         scale = detect_scale([r["gold_score"] for r in подготовка])

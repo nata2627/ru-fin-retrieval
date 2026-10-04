@@ -81,6 +81,10 @@ def build_datasets(cfg: TrainConfig, pairs: Sequence[TrainPair],
 
     наборы: dict = {}
     stats: dict = {}
+    if cfg.with_negatives and not negatives:
+        raise SystemExit(
+            f"этапу {cfg.tag} нужны трудные негативы, а подготовки D0 нет. "
+            f"Посчитайте gpu_prepare.py и подключите его вывод входом.")
     if "pairs" in cfg.datasets:
         cols = as_dataset(pairs, negatives if cfg.with_negatives else None,
                           texts if cfg.with_negatives else None,
@@ -91,8 +95,11 @@ def build_datasets(cfg: TrainConfig, pairs: Sequence[TrainPair],
                           "выброшено за недостатком негативов":
                               len(pairs) - len(cols["anchor"])}
     if "distill" in cfg.datasets:
-        if prepared is None:
-            raise ValueError("дистилляции нужен файл подготовки D0 с оценками учителя")
+        if not prepared:
+            raise SystemExit(
+                f"этапу {cfg.tag} нужна дистилляция, а файла подготовки D0 "
+                f"с оценками учителя нет. Посчитайте gpu_prepare.py "
+                f"и подключите его вывод входом.")
         cols = build_distill_columns(pairs, prepared, texts, cfg.distill_docs, scale)
         наборы["distill"] = Dataset.from_dict(cols)
         stats["distill"] = {"строк": len(cols["anchor"]),
