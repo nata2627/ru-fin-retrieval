@@ -387,6 +387,32 @@ def candidates_for(queries: list[dict], chunks: list[dict], depth: int,
     return out
 
 
+def собрать_отчёт(записи: list[dict], scale: str, разрешено, args,
+                  прочее: dict) -> dict:
+    """Отчёт о подготовке. Отдельной функцией, чтобы её можно было проверить.
+
+    Эта часть исполняется ровно один раз, в самом конце многочасового
+    прогона, и ошибка в ней обнулила бы всю работу. Проверять её на
+    видеокарте значит платить часами за каждую опечатку, поэтому она
+    вынесена сюда и покрыта тестом.
+    """
+    правила = NegativeRules(per_query=args.per_query, train_acts=разрешено)
+    _, stats = pick_all(записи, правила, scale)
+    места = sorted(r["teacher_place"] for r in записи)
+    отчёт = dict(прочее)
+    отчёт.update({
+        "шкала оценок": scale,
+        "вопросов": len(записи),
+        "обучающих актов": len(разрешено),
+        # Пустой список означал бы, что считать было нечего. Это не ошибка,
+        # а законный исход продолженного прогона, и падать тут нельзя.
+        "медиана места эталона у учителя": места[len(места) // 2] if места else 0,
+        "эталон первым у учителя": sum(1 for m in места if m == 1),
+        "негативы": stats,
+    })
+    return отчёт
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--acts", default=None)
@@ -561,6 +587,11 @@ def main() -> None:
 
     записи: list[dict] = список_готовых
     все_оценки: list[float] = []
+    # Счётчик, а не длина последней пачки. `пары` живёт внутри цикла,
+    # и при продолжении прогона, когда считать уже нечего, цикл не делает
+    # ни одного витка: обращение к `пары` в отчёте падало бы по имени —
+    # в самом конце, после того как вся работа сделана.
+    пройдено_пар = 0
     всего_пачек = (len(queries) + args.shard - 1) // args.shard
     for н, начало in enumerate(range(0, len(queries), args.shard), start=1):
         пачка = queries[начало:начало + args.shard]
@@ -572,6 +603,7 @@ def main() -> None:
         print(f"\nпачка {н} из {всего_пачек}: вопросов {len(пачка)}, "
               f"пар {len(пары)}", flush=True)
         оценки = score_pairs(пары, tok, учитель, device, batch_size=args.batch_size)
+        пройдено_пар += len(пары)
         все_оценки += оценки.tolist()
         записи += записать(пачка, адрес, оценки)
         прошло = time.time() - t0
@@ -581,10 +613,7 @@ def main() -> None:
               flush=True)
 
     scale = detect_scale(все_оценки or [r["gold_score"] for r in записи])
-    правила = NegativeRules(per_query=args.per_query, train_acts=разрешено)
-    _, stats = pick_all(записи, правила, scale)
-    места = sorted(r["teacher_place"] for r in записи)
-    report = {
+    report = собрать_отчёт(записи, scale, разрешено, args, {
         "учитель": args.teacher,
         "веса учителя": teacher,
         "устройство учителя": арх_учителя,
@@ -600,13 +629,10 @@ def main() -> None:
         "посчитано в этом прогоне": len(queries),
         "обучающих фрагментов": len(обучающие),
         "обучающих актов": len(разрешено),
-        "проходов учителя": len(пары),
+        "проходов учителя": пройдено_пар,
         "секунд на выдачу": round(секунд_выдача, 1),
         "секунд всего": round(time.time() - t0, 1),
-        "медиана места эталона у учителя": места[len(места) // 2],
-        "эталон первым у учителя": sum(1 for m in места if m == 1),
-        "негативы": stats,
-    }
+    })
     with open(report_path, "w", encoding="utf-8") as f:
         json.dump(report, f, ensure_ascii=False, indent=1)
 
