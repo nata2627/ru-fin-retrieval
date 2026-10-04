@@ -275,10 +275,22 @@ def score_pairs(pairs: list[tuple[str, str]], tok, model, device: str,
     return out
 
 
+def _с_эталоном(выдача, query: dict, depth: int) -> list[str]:
+    """Список кандидатов, в котором эталон есть обязательно.
+
+    Без его оценки не работает отсечка негативов: порог считается от неё.
+    """
+    найдено = [c for c, _ in выдача] if выдача and isinstance(выдача[0], tuple) \
+        else list(выдача)
+    if query["gold_chunk_id"] not in найдено:
+        найдено = найдено[:depth - 1] + [query["gold_chunk_id"]]
+    return найдено
+
+
 def candidates_for(queries: list[dict], chunks: list[dict], depth: int,
                    device: str, batch_size: int = 128,
-                   student: str = STUDENT) -> dict[str, list[str]]:
-    """Гибридная выдача по обучающим фрагментам: BM25 плюс плотный поиск."""
+                   student: str = STUDENT, dense: bool = False) -> dict[str, list[str]]:
+    """Кандидаты по обучающим фрагментам: BM25, при желании плюс плотный поиск."""
     ids = [c["chunk_id"] for c in chunks]
     texts = [c["text"] for c in chunks]
 
@@ -287,50 +299,71 @@ def candidates_for(queries: list[dict], chunks: list[dict], depth: int,
     print(f"   BM25 по {len(ids)} фрагментам построен за {time.time() - t0:.0f} с",
           flush=True)
 
+    if not dense:
+        # Кандидаты одним BM25, без плотного поиска, и это решение.
+        # Загрузка ученика через sentence-transformers дважды уводила
+        # прогон в зависание на двенадцать часов, причём молча: ни ошибки,
+        # ни строки в журнале. Разбираться в чужом пути загрузки дороже,
+        # чем обойтись без него.
+        #
+        # Потеря при этом невелика. Кандидаты здесь — не выдача, а список,
+        # который целиком переоценивает учитель; плотный поиск добавил бы
+        # в него несколько фрагментов, найденных по смыслу, а не по словам.
+        # Этап C проекта отбирал кандидатов ровно так же, одним BM25
+        # на глубину 30, и это описано в отчёте по набору.
+        print("   плотный поиск выключен: кандидаты одним BM25", flush=True)
+        return {q["query_id"]: _с_эталоном(bm25.search(q["text"], depth), q, depth)
+                for q in queries}
+
     spec = MODELS[SPEC]
-    # Загрузка под будильником. Зависание — не ошибка, его не ловит ни один
-    # `try`: сессия просто стоит, пока не кончится время. Один прогон уже
-    # простоял так двенадцать часов и не оставил ничего.
-    import gpu_search as S
+    # Загрузка ученика идёт через transformers напрямую, а не через
+    # sentence-transformers: тот путь дважды завис намертво. Пулинг
+    # у e5 — среднее по токенам с маской, и это ровно то, что делает
+    # обёртка; результат совпадает, а зависимостей меньше.
+    import torch
+    from transformers import AutoModel, AutoTokenizer
+
     t0 = time.time()
-    with S.time_limit(S.MODEL_TIMEOUT):
-        model = common.load_encoder(student, device, spec.max_seq_length)
+    stok = AutoTokenizer.from_pretrained(student, use_fast=True)
+    smodel = AutoModel.from_pretrained(student, **common.half_kwargs(device))
+    smodel = common.ensure_half(smodel.to(device), device).eval()
     print(f"   ученик загружен за {time.time() - t0:.0f} с", flush=True)
 
-    def закодировать(энкодер, что: list[str], имя: str, блок: int = 4096) -> np.ndarray:
+    def закодировать(энкодер, что: list[str], имя: str, блок: int = 2048) -> np.ndarray:
         """Кодирование блоками, с отчётом после каждого.
 
         Один вызов на сорок тысяч текстов — это полчаса молчания,
-        неотличимого от зависания. Блоками видно скорость с первой минуты,
-        и прогон, который встал, виден сразу.
-
-        Полоса прогресса выключена нарочно: в журнале Kaggle она
-        разворачивается в сотни тысяч строк и сама становится обузой.
+        неотличимого от зависания.
         """
         куски = []
         t = time.time()
-        for начало in range(0, len(что), блок):
-            кусок = что[начало:начало + блок]
-            куски.append(энкодер.encode(кусок, batch_size=batch_size,
-                                      convert_to_numpy=True,
-                                      normalize_embeddings=True,
-                                      show_progress_bar=False))
-            сделано = начало + len(кусок)
-            прошло = time.time() - t
-            print(f"   {имя}: {сделано}/{len(что)}, {сделано / прошло:.0f} текст/с, "
-                  f"осталось ~{(len(что) - сделано) / max(сделано / прошло, 1e-6) / 60:.0f} мин",
-                  flush=True)
-        return np.vstack(куски) if len(куски) > 1 else куски[0]
+        with torch.no_grad():
+            for начало in range(0, len(что), блок):
+                кусок = что[начало:начало + блок]
+                части = []
+                for н in range(0, len(кусок), batch_size):
+                    b = stok(кусок[н:н + batch_size], padding=True, truncation=True,
+                             max_length=spec.max_seq_length, return_tensors="pt").to(device)
+                    h = энкодер(**b).last_hidden_state
+                    маска = b["attention_mask"].unsqueeze(-1).to(h.dtype)
+                    вектор = (h * маска).sum(1) / маска.sum(1).clamp(min=1e-9)
+                    части.append(torch.nn.functional.normalize(вектор, p=2, dim=1)
+                                 .float().cpu().numpy())
+                куски.append(np.vstack(части))
+                сделано = начало + len(кусок)
+                прошло = time.time() - t
+                print(f"   {имя}: {сделано}/{len(что)}, "
+                      f"{сделано / прошло:.0f} текст/с", flush=True)
+        return np.vstack(куски)
 
-    corpus = закодировать(model, [spec.passage_prefix + t for t in texts],
+    corpus = закодировать(smodel, [spec.passage_prefix + t for t in texts],
                           "фрагменты")
-    qvec = закодировать(model, [spec.query_prefix + q["text"] for q in queries],
+    qvec = закодировать(smodel, [spec.query_prefix + q["text"] for q in queries],
                         "вопросы")
-    del model
-
-    import torch
+    del smodel
     if device == "cuda":
         torch.cuda.empty_cache()
+
     dtype = torch.float16 if device == "cuda" else torch.float32
     mat = torch.from_numpy(corpus).to(device, dtype)
     q = torch.from_numpy(qvec).to(device, dtype)
@@ -349,11 +382,8 @@ def candidates_for(queries: list[dict], chunks: list[dict], depth: int,
     for query in queries:
         qid = query["query_id"]
         лексика = [(c, 0.0) for c in bm25.search(query["text"], depth)]
-        слито = [c for c, _ in rrf([лексика, плотный[qid]], top=depth)]
-        # эталон вставляется силой: без его оценки не работает отсечка
-        if query["gold_chunk_id"] not in слито:
-            слито = слито[:depth - 1] + [query["gold_chunk_id"]]
-        out[qid] = слито
+        слито = rrf([лексика, плотный[qid]], top=depth)
+        out[qid] = _с_эталоном(слито, query, depth)
     return out
 
 
@@ -385,6 +415,11 @@ def main() -> None:
                     help="сколько кандидатов на вопрос. Цена прогона линейна "
                          "по глубине: 30 даёт 183 тысячи проходов учителя")
     ap.add_argument("--batch-size", type=int, default=64)
+    ap.add_argument("--dense", action="store_true",
+                    help="добавить плотный поиск к кандидатам. По умолчанию "
+                         "выключен: загрузка ученика дважды уводила прогон "
+                         "в зависание, а кандидатов целиком переоценивает "
+                         "учитель")
     ap.add_argument("--shard", type=int, default=250,
                     help="сколько вопросов считать между записями на диск. "
                          "Пачка поменьше — чаще отчёт и меньше потерь "
@@ -497,7 +532,8 @@ def main() -> None:
 
     t0 = time.time()
     кандидаты = (candidates_for(queries, обучающие, args.depth, device,
-                                student=student) if queries else {})
+                                student=student, dense=args.dense)
+                 if queries else {})
     секунд_выдача = time.time() - t0
 
     тексты = {c["chunk_id"]: c["text"] for c in обучающие}
@@ -559,6 +595,7 @@ def main() -> None:
         "замер скорости": замер,
         "шкала оценок": scale,
         "глубина": args.depth,
+        "кандидаты": "BM25 и плотный поиск" if args.dense else "только BM25",
         "вопросов": len(записи),
         "посчитано в этом прогоне": len(queries),
         "обучающих фрагментов": len(обучающие),
