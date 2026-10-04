@@ -33,17 +33,64 @@ TOP = 50          # та же глубина, что у всех конфигу�
 
 
 def load_model(path: str, device: str, max_seq_length: int = 512):
-    from gpu_common import load_encoder
-    return load_encoder(path, device, max_seq_length)
+    """Поднять энкодер через transformers напрямую.
+
+    **Не через `sentence-transformers`, и это дорого выученное решение.**
+    Тот путь загрузки дважды уводил прогон в зависание на двенадцать часов,
+    молча: ни ошибки, ни строки в журнале, будильник не срабатывал.
+    Разбираться в чужом пути загрузки дороже, чем обойтись без него.
+
+    Пулинг у e5 — среднее по токенам с маской, и это ровно то, что делает
+    обёртка для этой модели. Результат совпадает, зависимостей меньше.
+    Веса, сохранённые обучением, лежат в том же виде, что и у исходной
+    модели, поэтому читаются так же.
+    """
+    import torch
+    from gpu_common import ensure_half, half_kwargs
+    from transformers import AutoModel, AutoTokenizer
+
+    t0 = time.time()
+    tok = AutoTokenizer.from_pretrained(path, use_fast=True)
+    model = AutoModel.from_pretrained(path, **half_kwargs(device))
+    model = ensure_half(model.to(device), device).eval()
+    print(f"   энкодер загружен за {time.time() - t0:.0f} с "
+          f"(быстрый токенизатор: {getattr(tok, 'is_fast', False)})", flush=True)
+    assert torch is not None
+    return tok, model, max_seq_length
 
 
 def encode(model, texts: list[str], prefix: str, batch_size: int = 128,
-           progress: bool = False) -> np.ndarray:
+           progress: bool = False, блок: int = 4096) -> np.ndarray:
+    """Эмбеддинги блоками, с отчётом о скорости после каждого.
+
+    Один вызов на шестьдесят тысяч текстов — это несколько минут молчания,
+    неотличимого от зависания, а неотличие уже стоило двух сессий.
+    """
+    import torch
+    tok, сеть, max_len = model
     if prefix:
         texts = [prefix + t for t in texts]
-    vec = model.encode(texts, batch_size=batch_size, convert_to_numpy=True,
-                       normalize_embeddings=True, show_progress_bar=progress)
-    return vec.astype("float32")
+    куски = []
+    t = time.time()
+    with torch.no_grad():
+        for начало in range(0, len(texts), блок):
+            кусок = texts[начало:начало + блок]
+            части = []
+            for н in range(0, len(кусок), batch_size):
+                b = tok(кусок[н:н + batch_size], padding=True, truncation=True,
+                        max_length=max_len, return_tensors="pt").to(сеть.device)
+                h = сеть(**b).last_hidden_state
+                маска = b["attention_mask"].unsqueeze(-1).to(h.dtype)
+                вектор = (h * маска).sum(1) / маска.sum(1).clamp(min=1e-9)
+                части.append(torch.nn.functional.normalize(вектор, p=2, dim=1)
+                             .float().cpu().numpy())
+            куски.append(np.vstack(части))
+            сделано = начало + len(кусок)
+            if progress:
+                прошло = time.time() - t
+                print(f"   эмбеддинги: {сделано}/{len(texts)}, "
+                      f"{сделано / прошло:.0f} текст/с", flush=True)
+    return np.vstack(куски).astype("float32")
 
 
 # Обрезка вектора берётся из `rufin.retrieval.dense`, а не пишется здесь:
