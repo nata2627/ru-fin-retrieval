@@ -285,6 +285,16 @@ def train(cfg: TrainConfig, наборы: dict, out_dir: str, weights: str = "",
     # об этом надо из вывода, а не гадать по цифрам.
     известные = set(inspect.signature(SentenceTransformerTrainingArguments.__init__)
                     .parameters)
+    # Разогрев переименовали. В пятой версии transformers `warmup_ratio`
+    # помечен устаревшим, а доля разогрева задаётся через `warmup_steps`
+    # дробным числом. Просто выбросить неизвестный ключ нельзя: обучение
+    # пошло бы вовсе без разогрева, не сказав об этом ни слова, а первые
+    # шаги с полным шагом обучения портят веса тем сильнее, чем меньше
+    # обучаемая часть.
+    if "warmup_ratio" not in известные and "warmup_steps" in известные:
+        параметры["warmup_steps"] = параметры.pop("warmup_ratio")
+        print(f"[{cfg.tag}] разогрев задан через warmup_steps: эта версия "
+              f"библиотеки не знает warmup_ratio", flush=True)
     лишние = [k for k in параметры if k not in известные]
     for k in лишние:
         print(f"[{cfg.tag}] параметр {k} эта версия библиотеки не знает, "
