@@ -484,9 +484,9 @@ def main() -> None:
     арх_учителя = check_arch(teacher, {"num_labels": 1}, "учитель")
     арх_ученика = check_arch(student, {"hidden_size": 384}, "ученик")
 
-    ruler = common.make_ruler()
     acts = common.load_acts(args.acts)
-    chunks = common.build_chunks_cached(acts, "base", ruler, args.chunks_cache)
+    chunks = common.build_chunks_cached(acts, "base", common.make_ruler,
+                                                 args.chunks_cache)
 
     split_path = args.split or common.find_file("split.json")
     if split_path is None:

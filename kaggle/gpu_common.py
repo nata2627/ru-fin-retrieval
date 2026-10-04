@@ -15,15 +15,47 @@ import json
 import os
 import time
 
-from rufin.chunk_configs import BY_NAME
-from rufin.chunking import TokenRuler, chunk_act
+# Запрет на обращения к HuggingFace. Ставится до первого импорта
+# transformers, иначе библиотека успеет прочитать настройки.
+#
+# Это не предпочтение, а вывод из потери суток. Секрет с токеном через API
+# к ядру не прицепить, значит любое обращение к хабу идёт неавторизованным,
+# а такое обращение не падает, а молча встаёт. Будильник его не снимает:
+# процесс стоит внутри чужого кода, куда сигнал не доходит. Два прогона
+# по двенадцать часов простояли ровно так.
+#
+# С этими переменными случайное обращение падает сразу и называет себя.
+# Отказ дешевле зависания в двенадцать часов на три порядка.
+for _ключ in ("HF_HUB_OFFLINE", "TRANSFORMERS_OFFLINE", "HF_DATASETS_OFFLINE"):
+    os.environ.setdefault(_ключ, "1")
+
+from rufin.chunk_configs import BY_NAME  # noqa: E402
+from rufin.chunking import TokenRuler, chunk_act  # noqa: E402
 
 TOKENIZER = "xlm-roberta-base"
 
 
-def make_ruler() -> TokenRuler:
+def make_ruler(path: str | None = None) -> TokenRuler:
+    """Токенизатор для нарезки.
+
+    Нужен только там, где нарезка считается заново. Когда она берётся
+    готовой, а в этапе D она берётся готовой всегда, вызывать это нельзя:
+    имя `xlm-roberta-base` потянуло бы загрузку из хаба, а хаб запрещён.
+    """
+    return TokenRuler(_токенизатор(path or TOKENIZER))
+
+
+def _токенизатор(path: str):
     from transformers import AutoTokenizer
-    return TokenRuler(AutoTokenizer.from_pretrained(TOKENIZER))
+    if "/" not in path.strip("/") or path.startswith("/"):
+        return AutoTokenizer.from_pretrained(path, local_files_only=True)
+    найдено = resolve_model(path, обязательно=False)
+    if найдено == path:
+        raise SystemExit(
+            f"токенизатор {path} пришлось бы качать из хаба, а хаб запрещён. "
+            f"Подключите его моделью Kaggle или не пересчитывайте нарезку: "
+            f"готовая кладётся в кэш и токенизатора не требует.")
+    return AutoTokenizer.from_pretrained(найдено, local_files_only=True)
 
 
 def resolve_acts(path: str | None = None) -> str:
@@ -122,7 +154,7 @@ def find_file(name: str, root: str = "/kaggle/input") -> str | None:
     return None
 
 
-def build_chunks_cached(acts: list[dict], config: str, ruler: TokenRuler,
+def build_chunks_cached(acts: list[dict], config: str, ruler,
                         cache_dir: str | None) -> list[dict]:
     """Нарезка с сохранением на диск.
 
@@ -131,8 +163,14 @@ def build_chunks_cached(acts: list[dict], config: str, ruler: TokenRuler,
     простоя. Готовую кладём рядом: повторный прогон в той же сессии,
     а при подключении вывода — и в следующей, её не пересчитывает.
     """
+    # Токенизатор может прийти функцией, а не объектом: тогда он
+    # поднимается только если нарезку правда надо считать. Готовая нарезка
+    # токенизатора не требует вовсе, а его загрузка пошла бы в хаб.
+    def линейка():
+        return ruler() if callable(ruler) else ruler
+
     if not cache_dir:
-        return build_chunks(acts, config, ruler)
+        return build_chunks(acts, config, линейка())
     os.makedirs(cache_dir, exist_ok=True)
     path = os.path.join(cache_dir, f"{config}.jsonl")
     if os.path.exists(path):
@@ -148,7 +186,7 @@ def build_chunks_cached(acts: list[dict], config: str, ruler: TokenRuler,
         print(f"[нарезка {config}] взята из входов: {ready}, {len(out)} фрагментов",
               flush=True)
         return out
-    out = build_chunks(acts, config, ruler)
+    out = build_chunks(acts, config, линейка())
     with open(path, "w", encoding="utf-8") as f:
         for c in out:
             f.write(json.dumps(c, ensure_ascii=False) + "\n")
@@ -160,7 +198,8 @@ def pick_device() -> str:
     return "cuda" if torch.cuda.is_available() else "cpu"
 
 
-def resolve_model(hf_id: str, root: str = "/kaggle/input") -> str:
+def resolve_model(hf_id: str, root: str = "/kaggle/input",
+                  обязательно: bool = True) -> str:
     """Путь к весам: сначала модель, подключённая входом, потом HuggingFace.
 
     Зачем вообще искать локально. Скачивание с HuggingFace без токена
@@ -184,8 +223,14 @@ def resolve_model(hf_id: str, root: str = "/kaggle/input") -> str:
         if имя in каталог.lower().replace("_", "-"):
             находки.append(каталог)
     if not находки:
-        print(f"модель {hf_id}: среди входов нет, качаем с HuggingFace", flush=True)
-        return hf_id
+        if not обязательно:
+            return hf_id
+        raise SystemExit(
+            f"модель {hf_id} не подключена входом, а качать её из хаба нельзя. "
+            f"Хаб запрещён не из принципа: токен к ядру не прицепить, "
+            f"неавторизованное обращение не падает, а молча встаёт, и два "
+            f"прогона по двенадцать часов уже простояли так. Подключите "
+            f"модель через + Add Input -> Models.")
     # самый короткий путь: корень модели, а не вложенная папка вроде onnx/
     выбран = sorted(находки, key=lambda p: (len(p.split(os.sep)), len(p)))[0]
     print(f"модель {hf_id}: взята из входов, {выбран}", flush=True)

@@ -115,12 +115,17 @@ class Окружение:
         if self.device != "cuda":
             print("ВНИМАНИЕ: видеокарта не подключена. "
                   "Settings -> Accelerator -> GPU T4", flush=True)
+        # Веса ученика берутся только из подключённой модели. Имя в хабе
+        # здесь не годится: токен к ядру не прицепить, а неавторизованное
+        # обращение не падает, а молча встаёт.
+        self.student = common.resolve_model(STUDENT)
+
         self.queries = read_jsonl(найти("queries.jsonl", args.queries))
         self.qrels = read_qrels(найти("qrels.tsv", args.qrels))
 
-        ruler = common.make_ruler()
         acts = common.load_acts(args.acts)
-        self.chunks = common.build_chunks_cached(acts, "base", ruler, args.chunks_cache)
+        self.chunks = common.build_chunks_cached(acts, "base", common.make_ruler,
+                                                 args.chunks_cache)
         self.split = SP.load(найти("split.json", args.split))
         сверить_нарезку(self.chunks, self.split, args.chunks_cache)
         if args.limit_chunks:
@@ -208,13 +213,13 @@ def шаг_baseline(env: Окружение, args, journal: Journal) -> None:
     if journal.by_tag(БАЗОВАЯ):
         print("нулевая точка уже в журнале, пропуск", flush=True)
         return
-    print(f"\n=== нулевая точка: {STUDENT} ===", flush=True)
-    итог = оценить_dev(STUDENT, env, (), args.batch_size)
+    print(f"\n=== нулевая точка: {env.student} ===", flush=True)
+    итог = оценить_dev(env.student, env, (), args.batch_size)
     dim = next(d for d in итог if isinstance(d, int))
     journal.add(entry_from_per_query(
         БАЗОВАЯ, "базовая", итог[dim]["per_query"], итог[dim]["qids"],
         note="необученный multilingual-e5-small, тот же протокол",
-        weights=STUDENT))
+        weights=env.student))
     journal.save(args.journal)
     print(f"журнал: {args.journal}", flush=True)
 
@@ -237,7 +242,7 @@ def шаг_train(env: Окружение, args, journal: Journal) -> None:
         for имя, s in data_stats.items():
             print(f"    набор {имя}: {s}", flush=True)
         t0 = time.time()
-        отчёт = T.train(cfg, наборы, out_dir)
+        отчёт = T.train(cfg, наборы, out_dir, base=env.student)
         освободить()
 
         итог = оценить_dev(out_dir, env, cfg.matryoshka, args.batch_size)
@@ -435,7 +440,7 @@ def сохранить_матрицу(out_dir: str, env: Окружение, arg
 def шаг_forget(env: Окружение, args, journal: Journal) -> None:
     import gpu_forget as F
     метки = args.tags or ([journal.best().tag] if journal.best() else [])
-    пути = {БАЗОВАЯ: STUDENT}
+    пути = {БАЗОВАЯ: env.student}
     for метка in метки:
         пути[метка] = os.path.join(args.weights, метка)
     итог = F.measure(пути, env.device, task=args.forget_task,

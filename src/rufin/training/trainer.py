@@ -104,11 +104,20 @@ def build_datasets(cfg: TrainConfig, pairs: Sequence[TrainPair],
     return наборы, stats
 
 
-def load_student(cfg: TrainConfig, weights: str = ""):
-    """Поднять ученика. `weights` — папка предыдущего принятого этапа."""
+def load_student(cfg: TrainConfig, weights: str = "", base: str = ""):
+    """Поднять ученика.
+
+    `base` — путь к исходным весам. Передавать его обязательно там, где
+    хаб недоступен: имя `intfloat/multilingual-e5-small` потянуло бы
+    загрузку из сети, а на Kaggle это не падение, а зависание.
+    """
     from sentence_transformers import SentenceTransformer
-    path = weights or STUDENT
-    model = SentenceTransformer(path)
+    path = weights or base or STUDENT
+    if "/" in path and not os.path.exists(path):
+        raise SystemExit(
+            f"веса {path} пришлось бы качать из сети. Передайте путь "
+            f"к подключённой модели: обучение не должно зависеть от хаба.")
+    model = SentenceTransformer(path, local_files_only=True)
     model.max_seq_length = cfg.max_seq_length
     return model
 
@@ -138,7 +147,7 @@ def build_losses(cfg: TrainConfig, model) -> dict:
 
 
 def train(cfg: TrainConfig, наборы: dict, out_dir: str, weights: str = "",
-          model=None) -> dict:
+          model=None, base: str = "") -> dict:
     """Обучить один этап и сохранить веса. Возвращает отчёт для журнала.
 
     Про типы данных: `fp16` и `bf16` выключены явно, и это решение этапа,
@@ -153,7 +162,7 @@ def train(cfg: TrainConfig, наборы: dict, out_dir: str, weights: str = "",
     )
     from sentence_transformers.training_args import BatchSamplers, MultiDatasetBatchSamplers
 
-    model = model or load_student(cfg, weights)
+    model = model or load_student(cfg, weights, base)
     plan = apply_freeze(model, freeze_vocabulary=cfg.freeze_vocabulary)
     print(f"[{cfg.tag}] {plan}", flush=True)
 

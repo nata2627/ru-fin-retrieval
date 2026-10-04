@@ -25,6 +25,7 @@
 """
 from __future__ import annotations
 
+import os
 import random
 import sys
 import time
@@ -39,6 +40,12 @@ CORPUS_CAP = 20000
 
 def load_task(name: str, split: str = "test") -> tuple[dict, dict, dict]:
     """Загрузить задачу MTEB: корпус, запросы, разметка.
+
+    **Требует сети и потому на Kaggle не работает.** Хаб там запрещён:
+    токен к ядру не прицепить, а неавторизованное обращение не падает,
+    а молча встаёт. Значит посторонний набор надо заранее положить
+    датасетом Kaggle и подать сюда файлами, а этот путь оставлен для
+    машины, где сеть есть.
 
     Пакет `mteb` менял устройство объекта задачи между версиями, поэтому
     поля берутся не по одному известному имени, а по тому, что нашлось,
@@ -98,6 +105,11 @@ def measure(модели: dict[str, str], device: str, task: str = DEFAULT_TASK,
     """NDCG@10 на посторонней задаче для каждой модели и падение к базовой."""
     import gpu_traineval as E
 
+    if os.environ.get("HF_DATASETS_OFFLINE") == "1":
+        print("ЗАМЕР ЗАБЫВАНИЯ ПРОПУЩЕН: посторонний набор качается из сети, "
+              "а сеть запрещена. Положите набор датасетом Kaggle и подайте "
+              "файлами", file=sys.stderr, flush=True)
+        return {"задача": task, "пропущено": "сеть запрещена"}
     try:
         corpus, texts, qrels = load_task(task)
     except Exception as e:  # noqa: BLE001  любая беда здесь — не повод ронять прогон
