@@ -341,6 +341,89 @@ def план(args, journal: Journal):
     yield from stage_e(состав_лучшего(journal))
 
 
+def шаг_замер(env: Окружение, args, journal: Journal) -> None:
+    """Цена всего рецепта, посчитанная замером, а не арифметикой.
+
+    Меряются две вещи, из которых складывается всё остальное. Скорость
+    кодирования корпуса, потому что оценка после каждого этапа это прогон
+    всех 62 594 фрагментов. И секунда на шаг обучения для каждого состава,
+    потому что этапы отличаются именно составом.
+
+    Дальше цена каждого этапа рецепта получается умножением, и таблица
+    печатается целиком, с итогом в часах. Это и есть ответ на вопрос
+    «влезет ли рецепт в остаток квоты», заданный до того, как квота
+    потрачена, а не после.
+    """
+    import time
+
+    pairs, негативы, подготовка, scale = env.обучающее(args)
+
+    # 1. кодирование корпуса
+    образец = env.chunks[:args.probe_chunks]
+    модель = E.load_model(env.student, env.device)
+    t0 = time.time()
+    E.encode(модель, [c["text"] for c in образец], "passage: ", args.batch_size)
+    секунд = time.time() - t0
+    скорость = len(образец) / секунд
+    оценка_секунд = len(env.chunks) / скорость
+    print(f"\nкодирование: {скорость:.0f} фрагм./с, весь корпус "
+          f"({len(env.chunks)}) — {оценка_секунд / 60:.1f} мин", flush=True)
+    освободить(модель)
+
+    # 2. секунда на шаг для каждого состава рецепта
+    по_составу: dict[tuple, dict] = {}
+    for cfg in план(args, journal):
+        ключ = (cfg.datasets, cfg.with_negatives, bool(cfg.matryoshka),
+                cfg.batch, cfg.accumulate)
+        if ключ in по_составу:
+            continue
+        print(f"\n=== замер состава по метке {cfg.tag} ===", flush=True)
+        наборы, _ = T.build_datasets(cfg, pairs, негативы, подготовка,
+                                     env.texts, scale)
+        шагов = T.steps_per_epoch(cfg, наборы)
+        отчёт = T.train(cfg, наборы, os.path.join(args.weights, "замер"),
+                        base=env.student, замер_шагов=args.probe_steps)
+        по_составу[ключ] = {"секунд на шаг": отчёт["секунд на шаг"],
+                            "шагов в эпохе": шагов}
+        print(f"   {отчёт['секунд на шаг']} с на шаг, {шагов} шагов в эпохе",
+              flush=True)
+        освободить()
+
+    # 3. цена рецепта целиком
+    строки, итого = [], 0.0
+    for cfg in план(args, journal):
+        ключ = (cfg.datasets, cfg.with_negatives, bool(cfg.matryoshka),
+                cfg.batch, cfg.accumulate)
+        м = по_составу[ключ]
+        обучение = cfg.epochs * м["шагов в эпохе"] * м["секунд на шаг"]
+        всего = обучение + оценка_секунд
+        итого += всего
+        строки.append({"метка": cfg.tag, "этап": cfg.stage,
+                       "обучение, мин": round(обучение / 60, 1),
+                       "оценка, мин": round(оценка_секунд / 60, 1),
+                       "всего, мин": round(всего / 60, 1)})
+    итого += оценка_секунд  # нулевая точка
+
+    print("\n==== цена рецепта по замеру ====", flush=True)
+    print(f"{'метка':<16} {'этап':<5} {'обучение':>10} {'оценка':>8} {'всего':>8}",
+          flush=True)
+    print(f"{'нулевая точка':<16} {'':<5} {'0.0':>10} "
+          f"{оценка_секунд / 60:>8.1f} {оценка_секунд / 60:>8.1f}", flush=True)
+    for r in строки:
+        print(f"{r['метка']:<16} {r['этап']:<5} {r['обучение, мин']:>10} "
+              f"{r['оценка, мин']:>8} {r['всего, мин']:>8}", flush=True)
+    print(f"\nИТОГО {итого / 3600:.1f} ч на весь рецепт", flush=True)
+
+    итог = {"кодирование, фрагм./с": round(скорость, 1),
+            "оценка корпуса, мин": round(оценка_секунд / 60, 1),
+            "этапы": строки, "итого часов": round(итого / 3600, 2)}
+    os.makedirs(args.runs, exist_ok=True)
+    путь = os.path.join(args.runs, "zamer_recepta.json")
+    with open(путь, "w", encoding="utf-8") as f:
+        json.dump(итог, f, ensure_ascii=False, indent=1)
+    print(f"замер: {путь}", flush=True)
+
+
 def шаг_all(env: Окружение, args, journal: Journal) -> None:
     """Нулевая точка и весь рецепт одним процессом.
 
@@ -477,7 +560,7 @@ def шаг_forget(env: Окружение, args, journal: Journal) -> None:
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--step", required=True,
-                    choices=("baseline", "train", "all", "final", "forget"))
+                    choices=("baseline", "train", "all", "замер", "final", "forget"))
     ap.add_argument("--tags", nargs="*", default=None,
                     help="какие этапы считать; по умолчанию весь рецепт")
     ap.add_argument("--acts", default=None)
@@ -495,6 +578,10 @@ def main() -> None:
     ap.add_argument("--batch-size", type=int, default=128,
                     help="размер батча при подсчёте эмбеддингов, не при обучении")
     ap.add_argument("--per-query", type=int, default=2)
+    ap.add_argument("--probe-chunks", type=int, default=4096,
+                    help="на скольких фрагментах мерить скорость кодирования")
+    ap.add_argument("--probe-steps", type=int, default=6,
+                    help="сколько шагов обучения мерить на каждый состав")
     ap.add_argument("--limit-chunks", type=int, default=0,
                     help="урезать корпус для оценки. Только для пробы пути: "
                          "метрика по урезанному корпусу ничего не значит, "
@@ -518,7 +605,8 @@ def main() -> None:
     journal = Journal.load(args.journal)
     env = Окружение(args)
     {"baseline": шаг_baseline, "train": шаг_train, "all": шаг_all,
-     "final": шаг_final, "forget": шаг_forget}[args.step](env, args, journal)
+     "замер": шаг_замер, "final": шаг_final,
+     "forget": шаг_forget}[args.step](env, args, journal)
 
 
 if __name__ == "__main__":

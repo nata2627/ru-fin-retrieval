@@ -153,8 +153,20 @@ def build_losses(cfg: TrainConfig, model) -> dict:
     return out
 
 
+def steps_per_epoch(cfg: TrainConfig, наборы: dict) -> int:
+    """Сколько шагов оптимизатора в одной эпохе.
+
+    Нужно замеру: он меряет секунды на шаг, а цена этапа это шаги,
+    помноженные на эпохи. Строки считаются по всем наборам сразу, потому
+    что сэмплер чередует их пропорционально размеру.
+    """
+    строк = sum(len(н) for н in наборы.values())
+    за_шаг = max(cfg.batch * cfg.accumulate, 1)
+    return max(1, -(-строк // за_шаг))
+
+
 def train(cfg: TrainConfig, наборы: dict, out_dir: str, weights: str = "",
-          model=None, base: str = "") -> dict:
+          model=None, base: str = "", замер_шагов: int = 0) -> dict:
     """Обучить один этап и сохранить веса. Возвращает отчёт для журнала.
 
     Про типы данных: `fp16` и `bf16` выключены явно, и это решение этапа,
@@ -196,6 +208,10 @@ def train(cfg: TrainConfig, наборы: dict, out_dir: str, weights: str = "",
         batch_sampler=sampler,
         multi_dataset_batch_sampler=MultiDatasetBatchSamplers.PROPORTIONAL,
     )
+    if замер_шагов:
+        # Замер: несколько шагов вместо эпохи. Веса такого прогона никому
+        # не нужны, нужна только секунда на шаг.
+        параметры["max_steps"] = замер_шагов
     # Версия библиотеки на видеокарте заранее не известна и успела уйти
     # далеко вперёд от той, на которой код писался. Имена параметров
     # обучения между версиями переименовывались, и падение на неизвестном
@@ -223,6 +239,12 @@ def train(cfg: TrainConfig, наборы: dict, out_dir: str, weights: str = "",
     t0 = time.time()
     result = trainer.train()
     seconds = time.time() - t0
+
+    if замер_шагов:
+        return {"метка": cfg.tag, "секунд": round(seconds, 1),
+                "шагов": int(result.global_step),
+                "секунд на шаг": round(seconds / max(result.global_step, 1), 2),
+                "параметры": plan.as_dict(), "замер": True}
 
     os.makedirs(out_dir, exist_ok=True)
     # save_pretrained — нынешнее имя, save — прежнее. Веса, не сохранённые
