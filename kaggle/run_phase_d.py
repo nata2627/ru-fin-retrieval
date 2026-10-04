@@ -237,7 +237,7 @@ def шаг_baseline(env: Окружение, args, journal: Journal) -> None:
         return
     print(f"\n=== нулевая точка: {env.student} ===", flush=True)
     итог = оценить_dev(env.student, env, (), args.batch_size)
-    dim = next(d for d in итог if isinstance(d, int))
+    dim = E.размерности(итог)[0]
     journal.add(entry_from_per_query(
         БАЗОВАЯ, "базовая", итог[dim]["per_query"], итог[dim]["qids"],
         note="необученный multilingual-e5-small, тот же протокол",
@@ -268,7 +268,7 @@ def шаг_train(env: Окружение, args, journal: Journal) -> None:
         освободить()
 
         итог = оценить_dev(out_dir, env, cfg.matryoshka, args.batch_size)
-        полная = max(d for d in итог if isinstance(d, int))
+        полная = E.размерности(итог)[0]
         запись = entry_from_per_query(
             cfg.tag, cfg.stage, итог[полная]["per_query"], итог[полная]["qids"],
             note=cfg.note, extends=cfg.extends, weights=out_dir,
@@ -276,7 +276,7 @@ def шаг_train(env: Окружение, args, journal: Journal) -> None:
             config=cfg.as_dict())
         if cfg.matryoshka:
             запись.config["матрёшка на dev"] = {
-                str(d): итог[d]["NDCG@10"] for d in sorted(итог) if isinstance(d, int)}
+                str(d): итог[d]["NDCG@10"] for d in E.размерности(итог)}
         journal.add(запись)
         journal.save(args.journal)
         if args.keep_only_best:
@@ -485,8 +485,8 @@ def шаг_final(env: Окружение, args, journal: Journal) -> None:
         print(f"\n=== финал: {метка}, размерности {dims or 'полная'} ===", flush=True)
         итог = E.evaluate(out_dir, env.chunks, env.queries, env.qrels,
                           env.device, dims=dims, batch_size=args.batch_size)
-        полная = max(d for d in итог if isinstance(d, int))
-        for dim in sorted((d for d in итог if isinstance(d, int)), reverse=True):
+        полная = E.размерности(итог)[0]
+        for dim in E.размерности(итог):
             имя = "dense-rufin" if dim == полная else f"dense-rufin-{dim}"
             путь = E.save_runs(args.runs, итог[dim]["runs"], имя)
             print(f"   {имя}: {путь}", flush=True)

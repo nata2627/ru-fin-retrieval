@@ -165,6 +165,18 @@ def evaluate(path: str, chunks: list[dict], queries: list[dict], qrels: dict,
     return out
 
 
+def размерности(итог: dict) -> list[int]:
+    """Размерности из результата оценки, по убыванию.
+
+    Отдельной функцией, потому что в этом словаре ключи разного рода:
+    размерности числами и «секунд на корпус» строкой. Прямой `sorted`
+    по такому словарю падает, сравнивая число со строкой, и падает он
+    в отчёте — то есть после того, как этап уже обучен и оценён.
+    Один раз это стоило шестнадцати минут видеокарты.
+    """
+    return sorted((d for d in итог if isinstance(d, int)), reverse=True)
+
+
 def dev_ids(queries: list[dict], qrels: dict, subsets: dict | None = None) -> set[str]:
     """Какие запросы считать dev.
 
