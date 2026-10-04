@@ -29,6 +29,17 @@ import time
 for _ключ in ("HF_HUB_OFFLINE", "TRANSFORMERS_OFFLINE", "HF_DATASETS_OFFLINE"):
     os.environ.setdefault(_ключ, "1")
 
+# Видна одна карта, и это тоже не предпочтение.
+#
+# Узел даёт две, но библиотека обучения сама заворачивает модель
+# в `DataParallel`, как только видит больше одной. Тот же `DataParallel`
+# уже уводил прогон в зависание на первой же партии, а в обучении он
+# вдобавок падает по памяти, потому что держит копию на каждой карте.
+#
+# Прятать вторую карту надёжнее, чем просить библиотеку её не трогать:
+# просить пришлось бы в каждом месте, где модель попадает в чужие руки.
+os.environ.setdefault("CUDA_VISIBLE_DEVICES", "0")
+
 from rufin.chunk_configs import BY_NAME  # noqa: E402
 from rufin.chunking import TokenRuler, chunk_act  # noqa: E402
 

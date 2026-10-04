@@ -16,6 +16,7 @@ from rufin.training.config import (
     ORDER,
     RECIPE,
     STUDENT,
+    A,
     C,
     TrainConfig,
     stage_d,
@@ -148,3 +149,37 @@ def test_мини_батч_не_больше_батча(c):
 
 def test_ученик_тот_самый():
     assert STUDENT == "intfloat/multilingual-e5-small"
+
+
+# ---- ужатие под память ----
+
+def test_контрастив_ужимается_мини_батчем_а_не_батчем():
+    """Батч у контрастива это число негативов. Уменьшить его значит
+    упростить задачу, а не удешевить её. Память там держит мини-батч:
+    GradCache делит батч на куски и хранит между проходами только
+    эмбеддинги."""
+    from rufin.training.trainer import ужать
+    меньше = ужать(A)
+    assert меньше.batch == A.batch
+    assert меньше.mini_batch == A.mini_batch // 2
+
+
+def test_дистилляция_ужимается_батчем_с_сохранением_эффективного():
+    """Связи между примерами нет, потери считаются по каждому вопросу
+    отдельно. Значит деление батча с увеличением накопления это
+    математически тот же шаг."""
+    from rufin.training.trainer import ужать
+    меньше = ужать(C)
+    assert меньше.effective_batch == C.effective_batch
+    assert меньше.batch == C.batch // 2
+    assert меньше.accumulate == C.accumulate * 2
+
+
+def test_ужатие_доходит_до_предела_и_честно_останавливается():
+    from rufin.training.trainer import ужать
+    ш = C
+    while ш is not None:
+        прежний, ш = ш, ужать(ш)
+        if ш is not None:
+            assert ш.effective_batch == C.effective_batch
+    assert прежний.batch == 1

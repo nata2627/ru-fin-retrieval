@@ -153,6 +153,15 @@ def build_losses(cfg: TrainConfig, model) -> dict:
     return out
 
 
+def _освободить() -> None:
+    import gc
+
+    import torch
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+
+
 def steps_per_epoch(cfg: TrainConfig, наборы: dict) -> int:
     """Сколько шагов оптимизатора в одной эпохе.
 
@@ -165,8 +174,37 @@ def steps_per_epoch(cfg: TrainConfig, наборы: dict) -> int:
     return max(1, -(-строк // за_шаг))
 
 
+def ужать(cfg: TrainConfig) -> TrainConfig | None:
+    """Та же конфигурация, но помещающаяся в меньшую память.
+
+    Способ ужатия зависит от функции потерь, и подменять один другим нельзя.
+
+    У контрастива память держит `mini_batch`: GradCache делит батч на куски
+    и хранит между проходами только эмбеддинги. Сам батч при этом трогать
+    **нельзя** — он задаёт число негативов, и уменьшить его значит упростить
+    задачу, а не удешевить её.
+
+    У дистилляции связи между примерами нет вовсе, потери считаются
+    по каждому вопросу отдельно. Значит батч можно делить, если во столько
+    же раз увеличить накопление: эффективный размер сохраняется, а это
+    математически тот же шаг.
+
+    Возвращает `None`, когда ужимать больше нечего.
+    """
+    from dataclasses import replace
+    if "distill" in cfg.datasets:
+        if cfg.batch <= 1:
+            return None
+        return replace(cfg, batch=cfg.batch // 2, accumulate=cfg.accumulate * 2,
+                       mini_batch=max(1, cfg.mini_batch // 2))
+    if cfg.mini_batch <= 1:
+        return None
+    return replace(cfg, mini_batch=cfg.mini_batch // 2)
+
+
 def train(cfg: TrainConfig, наборы: dict, out_dir: str, weights: str = "",
-          model=None, base: str = "", замер_шагов: int = 0) -> dict:
+          model=None, base: str = "", замер_шагов: int = 0,
+          ужимать: int = 4) -> dict:
     """Обучить один этап и сохранить веса. Возвращает отчёт для журнала.
 
     Про типы данных: `fp16` и `bf16` выключены явно, и это решение этапа,
@@ -181,9 +219,36 @@ def train(cfg: TrainConfig, наборы: dict, out_dir: str, weights: str = "",
     )
     from sentence_transformers.training_args import BatchSamplers, MultiDatasetBatchSamplers
 
+    # Нехватка памяти это не повод падать: конфигурацию можно ужать,
+    # сохранив смысл этапа. Сколько раз пробовать, задаётся ключом,
+    # и каждая попытка называет себя — подобранный размер уходит в отчёт
+    # и в рецепт, а не остаётся догадкой.
+    if ужимать:
+        меньше = cfg
+        for попытка in range(ужимать + 1):
+            try:
+                return train(меньше, наборы, out_dir, weights, model, base,
+                             замер_шагов, ужимать=0)
+            except Exception as e:  # noqa: BLE001
+                if "out of memory" not in str(e).lower() and \
+                        type(e).__name__ != "OutOfMemoryError":
+                    raise
+                дальше = ужать(меньше)
+                print(f"[{меньше.tag}] не хватило памяти при батче "
+                      f"{меньше.batch} и мини-батче {меньше.mini_batch}; "
+                      f"{'ужимаю' if дальше else 'ужимать больше нечего'}",
+                      flush=True)
+                if дальше is None:
+                    raise
+                меньше = дальше
+                model = None
+                _освободить()
+        raise RuntimeError(f"[{cfg.tag}] память не нашлась за {ужимать} попыток")
+
     model = model or load_student(cfg, weights, base)
     plan = apply_freeze(model, freeze_vocabulary=cfg.freeze_vocabulary)
-    print(f"[{cfg.tag}] {plan}", flush=True)
+    print(f"[{cfg.tag}] {plan}, батч {cfg.batch} на {cfg.accumulate}, "
+          f"мини-батч {cfg.mini_batch}", flush=True)
 
     losses = build_losses(cfg, model)
     # NO_DUPLICATES нужен контрастиву: один и тот же позитив, попавший в батч
@@ -244,6 +309,8 @@ def train(cfg: TrainConfig, наборы: dict, out_dir: str, weights: str = "",
         return {"метка": cfg.tag, "секунд": round(seconds, 1),
                 "шагов": int(result.global_step),
                 "секунд на шаг": round(seconds / max(result.global_step, 1), 2),
+                "батч": cfg.batch, "накопление": cfg.accumulate,
+                "мини-батч": cfg.mini_batch,
                 "параметры": plan.as_dict(), "замер": True}
 
     os.makedirs(out_dir, exist_ok=True)
