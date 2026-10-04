@@ -139,9 +139,16 @@ class Окружение:
             # бы 6004 эталона из 6112, и сборка пар честно отказалась бы
             # работать. Проба поймала это первой же попыткой.
             нужные = {c for ids in self.qrels.values() for c in ids}
+            # Эталоны берутся только у тех обучающих вопросов, которые
+            # проба и правда возьмёт. Все шесть тысяч тянут за собой семь
+            # тысяч фрагментов, и оценка на процессоре растягивается
+            # с восьми минут до тридцати при том, что обучению хватит двухсот.
             обучающий = args.train or common.find_file("synthetic_train.jsonl")
             if обучающий:
-                нужные |= {q["gold_chunk_id"] for q in read_jsonl(обучающий)}
+                вопросы = read_jsonl(обучающий)
+                if args.limit_train:
+                    вопросы = вопросы[:args.limit_train]
+                нужные |= {q["gold_chunk_id"] for q in вопросы}
             оставить = [c for c in self.chunks if c["chunk_id"] in нужные]
             прочие = [c for c in self.chunks if c["chunk_id"] not in нужные]
             self.chunks = (оставить + прочие)[:max(args.limit_chunks, len(оставить))]
