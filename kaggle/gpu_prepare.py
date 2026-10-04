@@ -110,7 +110,7 @@ def check_arch(model_path: str, ожидания: dict, кто: str) -> dict:
     Остальное печатается для журнала.
     """
     from transformers import AutoConfig
-    cfg = AutoConfig.from_pretrained(model_path)
+    cfg = AutoConfig.from_pretrained(model_path, local_files_only=True)
     свойства = {k: getattr(cfg, k, None) for k in
                 ("model_type", "vocab_size", "hidden_size", "num_hidden_layers",
                  "num_labels")}
@@ -208,7 +208,8 @@ def load_teacher(model_path: str, device: str):
     """
     from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
-    tok = AutoTokenizer.from_pretrained(model_path, use_fast=True)
+    tok = AutoTokenizer.from_pretrained(model_path, use_fast=True,
+                                        local_files_only=True)
     # Быстрый токенизатор — не мелочь. Медленный разбирает текст на питоне,
     # и на сотнях тысяч длинных пар он, а не видеокарта, становится узким
     # местом: карта при этом простаивает, а по длительности прогона
@@ -219,7 +220,7 @@ def load_teacher(model_path: str, device: str):
               "парах он будет узким местом, а не видеокарта", flush=True)
     t0 = time.time()
     model = AutoModelForSequenceClassification.from_pretrained(
-        model_path, **common.half_kwargs(device))
+        model_path, local_files_only=True, **common.half_kwargs(device))
     model = common.ensure_half(model.to(device), device).eval()
     print(f"   учитель загружен за {time.time() - t0:.0f} с "
           f"(быстрый токенизатор: {getattr(tok, 'is_fast', False)})", flush=True)
@@ -324,8 +325,10 @@ def candidates_for(queries: list[dict], chunks: list[dict], depth: int,
     from transformers import AutoModel, AutoTokenizer
 
     t0 = time.time()
-    stok = AutoTokenizer.from_pretrained(student, use_fast=True)
-    smodel = AutoModel.from_pretrained(student, **common.half_kwargs(device))
+    stok = AutoTokenizer.from_pretrained(student, use_fast=True,
+                                         local_files_only=True)
+    smodel = AutoModel.from_pretrained(student, local_files_only=True,
+                                       **common.half_kwargs(device))
     smodel = common.ensure_half(smodel.to(device), device).eval()
     print(f"   ученик загружен за {time.time() - t0:.0f} с", flush=True)
 

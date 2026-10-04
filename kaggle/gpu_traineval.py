@@ -50,8 +50,10 @@ def load_model(path: str, device: str, max_seq_length: int = 512):
     from transformers import AutoModel, AutoTokenizer
 
     t0 = time.time()
-    tok = AutoTokenizer.from_pretrained(path, use_fast=True)
-    model = AutoModel.from_pretrained(path, **half_kwargs(device))
+    tok = AutoTokenizer.from_pretrained(path, use_fast=True,
+                                        local_files_only=True)
+    model = AutoModel.from_pretrained(path, local_files_only=True,
+                                      **half_kwargs(device))
     model = ensure_half(model.to(device), device).eval()
     print(f"   энкодер загружен за {time.time() - t0:.0f} с "
           f"(быстрый токенизатор: {getattr(tok, 'is_fast', False)})", flush=True)
