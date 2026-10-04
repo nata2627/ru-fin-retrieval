@@ -133,8 +133,15 @@ class Окружение:
             # корпусу выше настоящей просто потому, что искать не из чего:
             # сравнивать её с чем бы то ни было нельзя, и журнал у такого
             # прогона обязан быть отдельный.
-            нужные = {c for ids in self.qrels.values() for c in ids} \
-                if hasattr(self, "qrels") else set()
+            # Эталоны обязаны остаться все, и не только размеченные.
+            # Эталоны обучающих вопросов лежат в обучающих актах, а в
+            # разметке их нет вовсе: урезание по одной разметке выбросило
+            # бы 6004 эталона из 6112, и сборка пар честно отказалась бы
+            # работать. Проба поймала это первой же попыткой.
+            нужные = {c for ids in self.qrels.values() for c in ids}
+            обучающий = args.train or common.find_file("synthetic_train.jsonl")
+            if обучающий:
+                нужные |= {q["gold_chunk_id"] for q in read_jsonl(обучающий)}
             оставить = [c for c in self.chunks if c["chunk_id"] in нужные]
             прочие = [c for c in self.chunks if c["chunk_id"] not in нужные]
             self.chunks = (оставить + прочие)[:max(args.limit_chunks, len(оставить))]
