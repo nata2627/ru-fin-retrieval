@@ -33,9 +33,14 @@ def main() -> None:
     ap.add_argument("--chunks", default="base")
     ap.add_argument("--from-model", default="rufin",
                    help="папка с матрицей полной размерности")
+    ap.add_argument("--embeddings", default=EMBDIR,
+                   help="корень раскладки эмбеддингов. Задаётся ключом, "
+                        "а не прибит к проекту: иначе скрипт нельзя ни "
+                        "проверить, ни направить на привезённую матрицу, "
+                        "лежащую не на своём месте")
     args = ap.parse_args()
 
-    источник = os.path.join(EMBDIR, args.chunks, args.from_model)
+    источник = os.path.join(args.embeddings, args.chunks, args.from_model)
     vectors = os.path.join(источник, "vectors.npy")
     if not os.path.exists(vectors):
         raise SystemExit(
@@ -55,7 +60,7 @@ def main() -> None:
         spec = MODELS[имя]
         if not spec.truncate_dim:
             continue
-        куда = os.path.join(EMBDIR, args.chunks, имя)
+        куда = os.path.join(args.embeddings, args.chunks, имя)
         os.makedirs(куда, exist_ok=True)
         срез = truncate(vec.astype("float32"), spec.truncate_dim).astype("float16")
         np.save(os.path.join(куда, "vectors.npy"), срез)
