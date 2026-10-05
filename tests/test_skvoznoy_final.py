@@ -184,3 +184,64 @@ def test_забывание_честно_пропускается_без_сет�
     R.шаг_forget(env, args, j)
     итог = json.loads((tmp_path / "runs" / "zabyvanie.json").read_text(encoding="utf-8"))
     assert "пропущено" in итог or "ошибка" in итог
+
+
+# ---- контроль воспроизводимости ----
+
+def постоянный(значение: float, n: int = 6):
+    return {к: [значение] * n for к in ("Recall@1", "Recall@5", "Recall@10",
+                                        "MRR@10", "NDCG@10")}
+
+
+def test_контроль_сходится_когда_число_то_же(модель, tmp_path, monkeypatch):
+    """Журнал склеивается из прогонов на разных образах Kaggle. Перед тем
+    как дописывать, считается заново то, что уже есть."""
+    env = окружение(tmp_path)
+    args = ключи(tmp_path, str(tmp_path))
+    j = Journal()
+    qids = [f"q{i:04d}" for i in range(6)]
+    j.add(entry_from_per_query("базовая", "базовая", постоянный(0.45), qids))
+
+    monkeypatch.setattr(R, "оценить_dev", lambda *a, **k: {
+        384: {"per_query": постоянный(0.45), "qids": qids},
+        "секунд на корпус": 1.0})
+    R.шаг_контроль(env, args, j)
+    итог = json.loads((tmp_path / "runs" / "kontrol.json").read_text(encoding="utf-8"))
+    assert итог["сошлось"] is True
+
+
+def test_контроль_отказывается_когда_число_уехало(модель, tmp_path, monkeypatch):
+    """Расхождение означает, что часть разницы между этапами окажется
+    разницей образов, а не рецепта. Дописывать в такой журнал нельзя."""
+    env = окружение(tmp_path)
+    args = ключи(tmp_path, str(tmp_path))
+    j = Journal()
+    qids = [f"q{i:04d}" for i in range(6)]
+    j.add(entry_from_per_query("базовая", "базовая", постоянный(0.45), qids))
+
+    monkeypatch.setattr(R, "оценить_dev", lambda *a, **k: {
+        384: {"per_query": постоянный(0.60), "qids": qids},
+        "секунд на корпус": 1.0})
+    with pytest.raises(SystemExit, match="не воспроизвелась"):
+        R.шаг_контроль(env, args, j)
+
+
+def test_контроль_без_журнала_говорит_что_проверять_нечего(tmp_path):
+    env = окружение(tmp_path)
+    args = ключи(tmp_path, str(tmp_path))
+    with pytest.raises(SystemExit, match="нет нулевой точки"):
+        R.шаг_контроль(env, args, Journal())
+
+
+def test_контроль_ничего_не_пишет_в_журнал(модель, tmp_path, monkeypatch):
+    """Это проверка, а не этап. Строки в таблице рецепта он не добавляет."""
+    env = окружение(tmp_path)
+    args = ключи(tmp_path, str(tmp_path))
+    j = Journal()
+    qids = [f"q{i:04d}" for i in range(6)]
+    j.add(entry_from_per_query("базовая", "базовая", постоянный(0.45), qids))
+    monkeypatch.setattr(R, "оценить_dev", lambda *a, **k: {
+        384: {"per_query": постоянный(0.45), "qids": qids},
+        "секунд на корпус": 1.0})
+    R.шаг_контроль(env, args, j)
+    assert [e.tag for e in j.entries] == ["базовая"]

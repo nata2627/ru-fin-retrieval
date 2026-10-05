@@ -5,6 +5,7 @@
 результата, и пропускает себя. После обрыва сессии достаточно запустить
 ячейку заново.
 
+    --step контроль   воспроизводится ли нулевая точка из журнала
     --step baseline   нулевая точка: dev необученного ученика
     --step train      обучение и оценка по dev, этап за этапом
     --step all        нулевая точка и рецепт подряд, одним процессом
@@ -43,7 +44,9 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import gpu_common as common  # noqa: E402
 import gpu_traineval as E  # noqa: E402
+import numpy as np  # noqa: E402
 
+from rufin import metrics as M  # noqa: E402
 from rufin import split as SP  # noqa: E402
 from rufin.benchmark import read_qrels  # noqa: E402
 from rufin.training import trainer as T  # noqa: E402
@@ -244,6 +247,64 @@ def шаг_baseline(env: Окружение, args, journal: Journal) -> None:
         weights=env.student))
     journal.save(args.journal)
     print(f"журнал: {args.journal}", flush=True)
+
+
+def шаг_контроль(env: Окружение, args, journal: Journal) -> None:
+    """Воспроизводится ли нулевая точка, посчитанная прежде.
+
+    Нужен, когда журнал склеивается из прогонов на разных образах Kaggle.
+    Образ обновляется без предупреждения: за один день 4 октября
+    transformers сменился с 5.0.0 на 5.16.1. Таблица рецепта сравнивает
+    этапы попарно, и смысл сравнения в том, что между ними отличается
+    только рецепт. Если отличается ещё и версия библиотеки, часть разницы
+    может быть её.
+
+    Поэтому перед тем как дописывать в старый журнал, считается заново
+    то, что в нём уже есть, и сравнивается. Четыре минуты против восьми
+    часов пересчёта всего рецепта на всякий случай.
+
+    В журнал не пишется ничего. Это проверка, а не этап.
+    """
+    прежняя = journal.by_tag(БАЗОВАЯ)
+    if прежняя is None:
+        raise SystemExit("в журнале нет нулевой точки, проверять нечего. "
+                         "Это обычный первый прогон, считайте --step all")
+    print("\n=== контроль: нулевая точка заново ===", flush=True)
+    print(f"    в журнале {прежняя.ndcg:.3f}, считаем на этом образе", flush=True)
+
+    итог = оценить_dev(env.student, env, (), args.batch_size)
+    dim = E.размерности(итог)[0]
+    свежая = entry_from_per_query("контроль", "контроль", итог[dim]["per_query"],
+                                  итог[dim]["qids"])
+
+    общие = [q for q in свежая.qids if q in set(прежняя.qids)]
+    a = np.array([dict(zip(свежая.qids, свежая.per_query["NDCG@10"])).get(q)
+                  for q in общие], dtype=float)
+    b = np.array([dict(zip(прежняя.qids, прежняя.per_query["NDCG@10"])).get(q)
+                  for q in общие], dtype=float)
+    разница, p = M.paired_diff_ci(a, b)
+
+    сошлось = разница.lo <= 0 <= разница.hi
+    print(f"    было {прежняя.ndcg:.3f}, стало {свежая.ndcg:.3f}", flush=True)
+    print(f"    разница {разница.mean:+.4f} [{разница.lo:+.4f}; {разница.hi:+.4f}] "
+          f"p={p:.3f}", flush=True)
+    print(f"    {'СОШЛОСЬ: журнал можно продолжать' if сошлось else 'РАЗОШЛОСЬ: журнал склеивать нельзя, нужен пересчёт рецепта целиком'}",
+          flush=True)
+
+    os.makedirs(args.runs, exist_ok=True)
+    путь = os.path.join(args.runs, "kontrol.json")
+    with open(путь, "w", encoding="utf-8") as f:
+        json.dump({"в журнале": прежняя.ndcg, "на этом образе": свежая.ndcg,
+                   "разница": {"mean": разница.mean, "lo": разница.lo,
+                               "hi": разница.hi, "p": p},
+                   "запросов": len(общие), "сошлось": сошлось},
+                  f, ensure_ascii=False, indent=1)
+    print(f"    {путь}", flush=True)
+    if not сошлось:
+        raise SystemExit(
+            "нулевая точка не воспроизвелась. Дописывать этапы в этот журнал "
+            "нельзя: часть разницы между этапами окажется разницей образов, "
+            "а не рецепта. Считайте рецепт заново одним прогоном.")
 
 
 def шаг_train(env: Окружение, args, journal: Journal) -> None:
@@ -560,7 +621,8 @@ def шаг_forget(env: Окружение, args, journal: Journal) -> None:
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--step", required=True,
-                    choices=("baseline", "train", "all", "замер", "final", "forget"))
+                    choices=("контроль", "baseline", "train", "all", "замер",
+                             "final", "forget"))
     ap.add_argument("--tags", nargs="*", default=None,
                     help="какие этапы считать; по умолчанию весь рецепт")
     ap.add_argument("--acts", default=None)
@@ -604,7 +666,8 @@ def main() -> None:
     os.makedirs(os.path.dirname(args.journal), exist_ok=True)
     journal = Journal.load(args.journal)
     env = Окружение(args)
-    {"baseline": шаг_baseline, "train": шаг_train, "all": шаг_all,
+    {"контроль": шаг_контроль, "baseline": шаг_baseline,
+     "train": шаг_train, "all": шаг_all,
      "замер": шаг_замер, "final": шаг_final,
      "forget": шаг_forget}[args.step](env, args, journal)
 
