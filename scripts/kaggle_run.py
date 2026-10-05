@@ -13,6 +13,7 @@
 Команды:
   dataset   обновить датасет с корпусом и кодом
   queries   загрузить набор запросов отдельным датасетом
+  weights   загрузить обученные веса отдельным датасетом
   run       собрать ноутбук, запустить и дождаться
   fetch     забрать результат последнего прогона
 """
@@ -32,6 +33,7 @@ PKG = os.path.join(DIST, "kaggle")
 
 DATASET = "ru-fin-retrieval"
 QUERIES_DATASET = "ru-fin-queries"
+WEIGHTS_DATASET = "ru-fin-weights"
 
 # Модели, подключаемые входом вместо скачивания с HuggingFace. Секреты Kaggle
 # через API не прицепить вовсе — ядро, созданное командой, токена не увидит, —
@@ -286,6 +288,10 @@ def main() -> None:
 
     p = sub.add_parser("queries", help="загрузить набор запросов")
 
+    p = sub.add_parser("weights", help="загрузить обученные веса")
+    p.add_argument("метки", nargs="*", default=None,
+                   help="какие этапы заливать; по умолчанию все из data/weights")
+
     p = sub.add_parser("run", help="собрать ноутбук, запустить и дождаться")
     p.add_argument("stage", choices=["a", "b", "c", "d0", "d", "export", "rerank"])
     p.add_argument("--slug", default=None)
@@ -375,6 +381,32 @@ def main() -> None:
         push_dataset(user, folder, QUERIES_DATASET, "ru-fin-queries",
                      "запросы, готовые выдачи и фрагменты")
 
+    elif args.cmd == "weights":
+        # Веса едут датасетом, а не выводом ядра. Вывод ядра не переживает
+        # ни падения этого ядра, ни переход на другой аккаунт, а финальный
+        # прогон без весов лучшего этапа сделать нельзя.
+        источник = os.path.join(ROOT, "data", "weights")
+        if not os.path.isdir(источник):
+            raise SystemExit(f"нет {os.path.relpath(источник, ROOT)}: "
+                             f"привезите веса с Kaggle")
+        метки = args.метки or sorted(os.listdir(источник))
+        folder = os.path.join(DIST, "weights")
+        shutil.rmtree(folder, ignore_errors=True)
+        os.makedirs(folder)
+        всего = 0
+        for метка in метки:
+            откуда = os.path.join(источник, метка)
+            if not os.path.isdir(откуда):
+                raise SystemExit(f"нет весов этапа {метка}")
+            shutil.copytree(откуда, os.path.join(folder, метка))
+            размер = sum(os.path.getsize(os.path.join(б, и))
+                         for б, _, ф in os.walk(откуда) for и in ф)
+            всего += размер
+            print(f"   {метка:<16} {размер / 1048576:>7.0f} МБ")
+        print(f"   {'итого':<16} {всего / 1048576:>7.0f} МБ")
+        push_dataset(user, folder, WEIGHTS_DATASET, "ru-fin-weights",
+                     "веса этапов рецепта: " + ", ".join(метки))
+
     elif args.cmd == "run":
         # вывод этапа A подключается как источник: там лежат матрицы эмбеддингов
         source = [f"{user}/{args.source}"] if args.source else []
@@ -416,6 +448,14 @@ def main() -> None:
         datasets = [f"{user}/{DATASET}"]
         if args.stage in ("b", "c", "d0", "d", "rerank"):
             datasets.append(f"{user}/{QUERIES_DATASET}")
+        # Веса подключаются, если датасет с ними есть. Финалу они нужны,
+        # остальным шагам безразличны: каждый этап обучается с исходных.
+        if args.stage == "d":
+            проба = run(["kaggle", "datasets", "status",
+                         f"{user}/{WEIGHTS_DATASET}"])
+            if проба.returncode == 0 and "error" not in (проба.stdout or "").lower():
+                datasets.append(f"{user}/{WEIGHTS_DATASET}")
+                print(f"  веса входом: {user}/{WEIGHTS_DATASET}")
         # Этапу D обе модели нужны обязательно: ученик считает плотную часть
         # выдачи, учитель — оценки. Остальным этапам модели входом не нужны,
         # у них свои источники весов.

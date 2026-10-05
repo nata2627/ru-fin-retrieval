@@ -518,6 +518,29 @@ def прибрать_веса(args, journal: Journal) -> None:
                   f"начинается с исходных", flush=True)
 
 
+def найти_веса(метка: str, args) -> str:
+    """Папка с весами этапа: своя, иначе подключённая входом.
+
+    Веса нужны только финалу, и взяться они могут из двух мест. Или этап
+    обучен в этом же прогоне, и они лежат в рабочей папке. Или он обучен
+    раньше, и тогда они приезжают датасетом: вывод ядра не переживает
+    ни падения этого ядра, ни переход на другой аккаунт.
+    """
+    своя = os.path.join(args.weights, метка)
+    if os.path.exists(os.path.join(своя, "config.json")):
+        return своя
+    import glob
+    найдено = glob.glob(f"/kaggle/input/**/{метка}/config.json", recursive=True)
+    if найдено:
+        путь = os.path.dirname(sorted(найдено, key=len)[0])
+        print(f"   веса этапа {метка} взяты из входов: {путь}", flush=True)
+        return путь
+    raise SystemExit(
+        f"нет весов этапа {метка}. Их ищут в {своя} и среди подключённых "
+        f"входов. Залить можно так: `python3 scripts/kaggle_run.py weights "
+        f"{метка}`, потом подключить датасет ru-fin-weights.")
+
+
 def шаг_final(env: Окружение, args, journal: Journal) -> None:
     """D6: один прогон по всему набору запросов. Единственное касание теста.
 
@@ -539,9 +562,7 @@ def шаг_final(env: Окружение, args, journal: Journal) -> None:
         запись = journal.by_tag(метка)
         cfg = (TrainConfig.from_dict(запись.config)
                if запись is not None and запись.config else BY_TAG.get(метка))
-        out_dir = os.path.join(args.weights, метка)
-        if not os.path.exists(out_dir):
-            raise SystemExit(f"нет весов этапа {метка}: {out_dir}")
+        out_dir = найти_веса(метка, args)
         dims = cfg.matryoshka if cfg else ()
         print(f"\n=== финал: {метка}, размерности {dims or 'полная'} ===", flush=True)
         итог = E.evaluate(out_dir, env.chunks, env.queries, env.qrels,
@@ -563,7 +584,7 @@ def шаг_final(env: Окружение, args, journal: Journal) -> None:
     if len(метки) > 1:
         print(f"    прочие метки ({', '.join(метки[1:])}) матрицу не сохраняют: "
               f"на маке по ней меряется задержка публикуемой модели", flush=True)
-    сохранить_матрицу(os.path.join(args.weights, метки[0]), env, args)
+    сохранить_матрицу(найти_веса(метки[0], args), env, args)
     with open(os.path.join(args.runs, "report_phase_d.json"), "w", encoding="utf-8") as f:
         json.dump({"финал": итоги, "правило": "разбивку по подвыборкам считает "
                                               "локальный make metrics"},

@@ -155,6 +155,35 @@ def test_финал_отказывается_без_весов(tmp_path):
         R.шаг_final(env, args, j)
 
 
+def test_веса_берутся_из_входов_если_своих_нет(модель, tmp_path, monkeypatch):
+    """Этап обучен прежним прогоном, его веса приехали датасетом. Вывод
+    ядра не переживает ни падения этого ядра, ни переход на другой аккаунт,
+    поэтому финал обязан уметь брать веса со стороны."""
+    входы = tmp_path / "вход" / "ru-fin-weights" / "a-3ep"
+    входы.mkdir(parents=True)
+    for имя in os.listdir(модель):
+        os.link(os.path.join(модель, имя), входы / имя)
+
+    настоящий = R.найти_веса
+
+    def подменённый(метка, args):
+        своя = os.path.join(args.weights, метка)
+        if os.path.exists(os.path.join(своя, "config.json")):
+            return своя
+        import glob
+        найдено = glob.glob(f"{tmp_path}/вход/**/{метка}/config.json", recursive=True)
+        assert найдено, "веса не нашлись среди входов"
+        return os.path.dirname(найдено[0])
+
+    monkeypatch.setattr(R, "найти_веса", подменённый)
+    env = окружение(tmp_path)
+    args = ключи(tmp_path, str(tmp_path / "своих-нет"))
+    j = журнал_с("a-3ep", {"tag": "a-3ep", "stage": "A", "matryoshka": []})
+    R.шаг_final(env, args, j)
+    assert (tmp_path / "runs" / "base__dense-rufin.jsonl").exists()
+    assert настоящий is not None
+
+
 def test_финал_отказывается_когда_нечего_прогонять(tmp_path):
     """Ни один этап не принят. Молча взять любой нельзя: на тест смотрят
     один раз, и смотреть на него непонятно чем — хуже, чем не смотреть."""
