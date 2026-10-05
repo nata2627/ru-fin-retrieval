@@ -27,6 +27,9 @@ venv/
 data/chunks/
 data/corpus/acts.jsonl
 data/runs/
+# Обученные веса: полгигабайта на этап. В репозиторий не идут,
+# публикуются отдельно на HuggingFace.
+data/weights/
 data/results/
 # Выгрузка в формате MTEB: корпус в ней тот же, что в data/corpus, — 240 МБ.
 # Собирается `make bench`, публикуется на HuggingFace, в репозитории
