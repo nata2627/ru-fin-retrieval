@@ -58,6 +58,20 @@ def run(cmd: list[str], **kw) -> subprocess.CompletedProcess:
     return subprocess.run(cmd, text=True, capture_output=True, **kw)
 
 
+def папка_ключа() -> str:
+    """Где лежит ключ Kaggle.
+
+    По умолчанию `~/.kaggle`, но клиент слушает `KAGGLE_CONFIG_DIR`,
+    и на этом держится работа с несколькими аккаунтами. Второй аккаунт —
+    не прихоть: недельная квота одна на аккаунт, а рецепт в неё
+    не помещается.
+
+    Переключение одной переменной, без правки файлов, значит перепутать
+    аккаунты труднее: в выводе всегда видно, под кем идёт работа.
+    """
+    return os.path.expanduser(os.environ.get("KAGGLE_CONFIG_DIR", "~/.kaggle"))
+
+
 def require_credentials() -> str:
     """Имя пользователя Kaggle; заодно проверка, что ключ на месте.
 
@@ -65,13 +79,13 @@ def require_credentials() -> str:
     и новый access_token, где имени нет вовсе. Поэтому имя спрашивается
     у самого клиента, а не вычитывается из файла.
     """
-    home = os.path.expanduser("~/.kaggle")
+    home = папка_ключа()
     if not any(os.path.exists(os.path.join(home, n))
                for n in ("kaggle.json", "access_token")):
         raise SystemExit(
-            "ключ Kaggle не найден. Взять: kaggle.com -> Settings -> API -> "
-            "Create New Token. Положить в ~/.kaggle/access_token "
-            "(или ~/.kaggle/kaggle.json) и выставить права 600.")
+            f"ключ Kaggle не найден в {home}. Взять: kaggle.com -> Settings -> "
+            f"API -> Create New Token. Положить туда и выставить права 600. "
+            f"Для второго аккаунта: KAGGLE_CONFIG_DIR=~/.kaggle-2")
     probe = subprocess.run(["kaggle", "config", "view"], text=True, capture_output=True)
     for line in (probe.stdout or "").splitlines():
         if line.strip().startswith("- username:"):
@@ -319,7 +333,7 @@ def main() -> None:
 
     args = ap.parse_args()
     user = require_credentials()
-    print(f"пользователь Kaggle: {user}\n")
+    print(f"пользователь Kaggle: {user}  (ключ из {папка_ключа()})\n")
 
     if args.cmd == "dataset":
         subprocess.run([sys.executable, os.path.join(ROOT, "scripts",
