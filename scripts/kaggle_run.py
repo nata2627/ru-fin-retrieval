@@ -325,6 +325,10 @@ def main() -> None:
     p.add_argument("--notebook", default=None,
                    help="запустить готовую тетрадь из notebooks/ вместо собранной "
                         "из скрипта этапа")
+    p.add_argument("--weights-input", action="store_true",
+                   help="подключить датасет с обученными весами. Нужно одному "
+                        "финалу: весят они под гигабайт, и Kaggle монтирует "
+                        "их перед стартом каждого прогона")
     p.add_argument("--kernels", nargs="*", default=None,
                    help="вывод каких ядер подключить входом, помимо обычного. "
                         "Нужно продолжению рецепта: журнал прежнего прогона "
@@ -468,14 +472,20 @@ def main() -> None:
         datasets = [f"{user}/{DATASET}"]
         if args.stage in ("b", "c", "d0", "d", "rerank"):
             datasets.append(f"{user}/{QUERIES_DATASET}")
-        # Веса подключаются, если датасет с ними есть. Финалу они нужны,
-        # остальным шагам безразличны: каждый этап обучается с исходных.
-        if args.stage == "d":
+        # Веса подключаются только по просьбе. Нужны они одному финалу,
+        # а весят под гигабайт, и Kaggle монтирует их перед стартом каждого
+        # прогона: полторы минуты впустую на запуск, которых к тому же
+        # не видно в журнале. Каждый этап обучается с исходных весов,
+        # так что всем прочим шагам они безразличны.
+        if args.weights_input:
             проба = run(["kaggle", "datasets", "status",
                          f"{user}/{WEIGHTS_DATASET}"])
-            if проба.returncode == 0 and "error" not in (проба.stdout or "").lower():
-                datasets.append(f"{user}/{WEIGHTS_DATASET}")
-                print(f"  веса входом: {user}/{WEIGHTS_DATASET}")
+            if проба.returncode != 0 or "error" in (проба.stdout or "").lower():
+                raise SystemExit(
+                    f"запрошены веса входом, но датасета {user}/{WEIGHTS_DATASET} "
+                    f"нет. Залить: python3 scripts/kaggle_run.py weights")
+            datasets.append(f"{user}/{WEIGHTS_DATASET}")
+            print(f"  веса входом: {user}/{WEIGHTS_DATASET}")
         # Этапу D обе модели нужны обязательно: ученик считает плотную часть
         # выдачи, учитель — оценки. Остальным этапам модели входом не нужны,
         # у них свои источники весов.
