@@ -86,6 +86,7 @@ SCRIPTS = [
     "kaggle/gpu_traineval.py",
     "kaggle/gpu_forget.py",
     "kaggle/run_phase_d.py",
+    "kaggle/run_variants.py",
     "kaggle/README.md",
 ]
 

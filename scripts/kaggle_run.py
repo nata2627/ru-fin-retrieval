@@ -313,7 +313,8 @@ def main() -> None:
                    help="какие этапы заливать; по умолчанию все из data/weights")
 
     p = sub.add_parser("run", help="собрать ноутбук, запустить и дождаться")
-    p.add_argument("stage", choices=["a", "b", "c", "d0", "d", "export", "rerank"])
+    p.add_argument("stage", choices=["a", "b", "c", "d0", "d", "export", "rerank",
+                                     "variants"])
     p.add_argument("--slug", default=None)
     p.add_argument("--source", default="ru-fin",
                    help="ядро, чей вывод подключается: там лежат матрицы этапа A")
@@ -367,7 +368,7 @@ def main() -> None:
         # и тем же эталоном, что в локальном отчёте.
         for name in ("queries.jsonl", "split.json", "pool_candidates.tsv",
                      "synthetic_train.jsonl", "synthetic_dev.jsonl",
-                     "qrels.tsv", "podvyborki.json"):
+                     "qrels.tsv", "podvyborki.json", "live_variants.jsonl"):
             src = os.path.join(ROOT, "data", "queries", name)
             if os.path.exists(src):
                 shutil.copy2(src, folder)
@@ -392,6 +393,15 @@ def main() -> None:
             if os.path.exists(src):
                 shutil.copy2(src, folder)
                 print(f"  в датасет: {os.path.basename(rel)}")
+
+        # Список фрагментов той матрицы, по которой посчитаны прежние выдачи.
+        # Им сверяется нарезка: при сдвиге границ идентификатор «акт#номер»
+        # не исчезает, а указывает на другой текст, и выдачи молча
+        # оказываются несравнимыми.
+        ids = os.path.join(ROOT, "data", "embeddings", "base", "rufin", "ids.txt")
+        if os.path.exists(ids):
+            shutil.copy2(ids, os.path.join(folder, "ids_base.txt"))
+            print("  в датасет: ids_base.txt для сверки нарезки")
 
         chunks = os.path.join(ROOT, "data", "chunks", "base.jsonl")
         if os.path.exists(chunks):
@@ -454,6 +464,12 @@ def main() -> None:
             # учителя считаются один раз и подключаются входом.
             "d": ("run_phase_d.py", "ru-fin-phase-d", "ru-fin phase D",
                   [f"{user}/ru-fin-d0"], True),
+            # Опыт с номерами актов: выдачи по вариантам живых вопросов.
+            # Вывод прежних ядер не нужен, матрицы считаются здесь же
+            # и кладутся в вывод — на этапе A их не сохранили, и это
+            # стоило пересчёта корпуса при каждом опыте над запросами.
+            "variants": ("run_variants.py", "ru-fin-variants", "ru fin variants",
+                         [], True),
         }
         script, slug, title, kernels, gpu = stages[args.stage]
         if args.slug:
@@ -470,7 +486,7 @@ def main() -> None:
                 slug = f"{slug}-cpu"
                 title = f"{title} cpu"
         datasets = [f"{user}/{DATASET}"]
-        if args.stage in ("b", "c", "d0", "d", "rerank"):
+        if args.stage in ("b", "c", "d0", "d", "rerank", "variants"):
             datasets.append(f"{user}/{QUERIES_DATASET}")
         # Веса подключаются только по просьбе. Нужны они одному финалу,
         # а весят под гигабайт, и Kaggle монтирует их перед стартом каждого
@@ -490,6 +506,10 @@ def main() -> None:
         # выдачи, учитель — оценки. Остальным этапам модели входом не нужны,
         # у них свои источники весов.
         models = list(MODELS.values()) if args.stage in ("d0", "d") else []
+        # Опыту нужна только исходная модель ученика: учитель весит 2,29 ГБ,
+        # и Kaggle монтирует его перед каждым запуском впустую.
+        if args.stage == "variants":
+            models = [MODELS["e5-small"]]
         if args.kernels:
             kernels = list(kernels) + [k if "/" in k else f"{user}/{k}"
                                        for k in args.kernels]
