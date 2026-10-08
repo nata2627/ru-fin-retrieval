@@ -15,8 +15,9 @@ CHUNKS ?= base
 FROM ?= base
 DENSE ?= bge-m3
 REPO ?= nata2627/ru-fin-retrieval
+WEIGHTS ?= data/weights/d-matryoshka
 
-.PHONY: help test lint probe check-split check-bm25 check-alignment remap length-effect chunking-effect corpus chunks use-chunks explan queries pool kaggle bench metrics latency errors clean-raw split live manual-task manual-apply judge sample-for-human kappa check-bench publish check-train dev-metrics recipe matryoshka
+.PHONY: help test lint act-numbers probe check-split check-bm25 check-alignment remap length-effect chunking-effect corpus chunks use-chunks explan queries pool kaggle bench metrics latency errors clean-raw split live manual-task manual-apply judge sample-for-human kappa check-bench publish check-train dev-metrics recipe matryoshka
 
 help:
 	@echo "Проверки (ни данных, ни видеокарты не требуют):"
@@ -56,6 +57,7 @@ help:
 	@echo "  dev-metrics  метрики ТОЛЬКО по dev — на время подбора рецепта"
 	@echo "  recipe       таблица «этап рецепта -> dev» из журнала обучения"
 	@echo "  matryoshka   индексы урезанных размерностей из полной матрицы"
+	@echo "  act-numbers  вклад номера акта в качество на живых вопросах"
 	@echo ""
 	@echo "На видеокарте Kaggle (см. kaggle/README.md):"
 	@echo "  kaggle       собрать пакет для загрузки (dist/kaggle, ~20 МБ)"
@@ -200,6 +202,21 @@ recipe:
 # индекса по каждой размерности.
 matryoshka:
 	$(PY) scripts/matryoshka_index.py --chunks $(CHUNKS) --from-model $(DENSE)
+
+# Сколько качества на живых вопросах держится на номере акта. Опыт парный:
+# те же 142 вопроса в трёх видах — как заданы, без номеров, без ссылок.
+# Видеокарта не нужна: индекс BM25 держится разреженной матрицей в 52 МБ,
+# а матрица фрагментов дообученной модели уже посчитана и лежит в проекте.
+act-numbers:
+	$(PY) scripts/live_variants.py
+	$(PY) scripts/bm25_run.py --chunks data/chunks/$(CHUNKS).jsonl \
+		--queries data/queries/live_variants.jsonl \
+		--out data/runs/live-variants__bm25.jsonl
+	$(PY) scripts/dense_run.py --model rufin --weights $(WEIGHTS) \
+		--chunks $(CHUNKS) --queries data/queries/live_variants.jsonl \
+		--out data/runs/live-variants__dense-rufin.jsonl
+	$(PY) scripts/make_hybrid.py --config live-variants --dense rufin
+	$(PY) scripts/act_number_effect.py
 
 errors:
 	$(PY) scripts/error_analysis.py --run data/runs/$(CHUNKS)__hybrid-rerank.jsonl \
